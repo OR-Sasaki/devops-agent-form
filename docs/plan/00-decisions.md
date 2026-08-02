@@ -2,8 +2,9 @@
 
 グリルセッションで確定した決定を、決まった順に記録する。用語は [CONTEXT.md](../../CONTEXT.md) に従う。
 
-**ステータス: 決定確定（D-001〜D-013）／未決事項なし／実装未着手**
-2026-08-02 のグリルセッションで全項目を解消。以降に新しい判断が生じたら D-014 以降として追記する。
+**ステータス: 決定確定（D-001〜D-015）／未決事項なし／実装未着手**
+2026-08-02 のグリルセッションで全項目を解消。同日の外部レビューを受けて D-014・D-015 を追加し、[D-002](#d-002-実行基盤は-ecs-fargate--alb--dynamodb) のコスト見積りと [D-008](#d-008-リージョンは-ap-northeast-1-に統一) のリスク認識を訂正した。
+以降に新しい判断が生じたら D-016 以降として追記する。
 
 ---
 
@@ -16,7 +17,8 @@
 | 項目 | 事実 |
 |---|---|
 | 提供状況 | GA 済み |
-| 対応リージョン | us-east-1 / us-west-2 / ap-southeast-2 / **ap-northeast-1** / eu-central-1 / eu-west-1 |
+| 対応リージョン | 11リージョン。us-east-1 / us-west-2 / ca-central-1 / sa-east-1 / ap-south-1 / ap-southeast-1 / ap-southeast-2 / **ap-northeast-1** / eu-central-1 / eu-west-1 / eu-west-2 |
+| **機能別のリージョン制限** | 公式に「Feature availability by Region」表がある。**Production operations（investigations / recommendations / prevention）・On-demand DevOps tasks・Custom agents は全リージョン。** **Release management（release readiness review / release testing）は us-east-1 のみ（preview）。** Sandbox（preview）は us-east-1 / us-west-2 / ap-northeast-1 / eu-west-1 |
 | スコープ | Agent Space はどのリージョンに作っても、紐づけたアカウントの全リージョンを監視できる |
 | 課金 | agent-second 課金。$0.0083 / agent-second。1回の調査（5〜10分）で $2.5〜5 程度 |
 | 無料枠 | 2ヶ月トライアル（Investigations 20h / Evaluations 15h / On-demand SRE 20h） |
@@ -29,11 +31,12 @@
 | 項目 | 事実 |
 |---|---|
 | 対応リージョン | 9リージョン。**ap-northeast-1 を含む**（GitHub アクセス元 IP の一覧に東京あり） |
-| **自動修復の制限** | **Automated Remediation（脆弱性の自動修正 PR）は us-east-1 のみ** ※要 Phase 0 で再確認 |
+| **自動修復の配信方式** | **リージョンではなくリポジトリ可視性で決まる。** 公式ドキュメント: private リポジトリには修正 PR を出すが、**public リポジトリには PR を出さず、ダウンロード可能な diff を finding に添付する**（修正前に脆弱性を開示しないため）。→ [D-010](#d-010-github-リポジトリは-publicor-sasakidevops-agent-form) で Public を選んだ時点で、**どのリージョンでも修正 PR は出ない**。[D-014](#d-014-security-agent-の自動修復はスコープ外) でスコープ外とした |
 | 課金 | オンデマンドペネトレーションテスト **$50 / task-hour**。2ヶ月の無料トライアルあり |
 | Terraform | `awscc_securityagent_agent_space` あり。AWS 公式サンプル [aws-samples/sample-terraform-for-security-agent](https://github.com/aws-samples/sample-terraform-for-security-agent)（2026-07-03 更新）が `iam.tf` / `security-agent.tf` 等を提供 |
 | 作成されるもの | Application（アカウントに1つ）、`SecurityAgentAppRole-*`（`AWSSecurityAgentWebAppPolicy`）、`SecurityAgentServiceRole-*`（ペンテスト用）、Agent Space、（任意）Target Domain、（任意）Pentest |
-| 機能 | PR の差分コードレビュー（GitHub 上にコメント）、リポジトリ全体スキャン、脅威モデリング、ペネトレーションテスト、自動修復 PR |
+| 機能 | PR の差分コードレビュー（GitHub 上にコメント）、リポジトリ全体スキャン、脅威モデリング、ペネトレーションテスト、自動修復（[D-014](#d-014-security-agent-の自動修復はスコープ外) でスコープ外） |
+| PR コードレビューの挙動 | 「Ready for review」で発火（draft は対象外）。解析開始時にコメントを出し、完了後に指摘をまとめて1レビューで投稿。**指摘ゼロでも `No issues identified.` とコメントする** → 脆弱性を仕込まなくても接続確認に使える。リポジトリ可視性による制限は無い |
 
 **GitHub 連携（公式ドキュメントで確認済み）**
 
@@ -98,7 +101,19 @@ AWS のフロンティアエージェントは2つあり、守備範囲が分か
 
 **理由** — [インシデント面](../../CONTEXT.md#インシデント面-incident-surface) が最も豊かになる。ALB 5xx・ターゲット異常・タスクの OOM／クラッシュ・CPU 高負荷・デプロイ失敗／ロールバックといった、DevOps Agent が想定する本番障害に最も近い事象を再現できる。
 
-**コスト** — 月額 約 $27（ALB $18 + Fargate 0.25vCPU $9、DynamoDB は実質 $0）。使わない間 `terraform destroy` すれば実質 1日 $1。
+**コスト** — 月額 **約 $55**（東京リージョン単価・[D-013](#d-013-委任された技術判断こちらで決定) の desired = 2 で計算）。
+
+| 内訳 | 月額 |
+|---|---|
+| ALB（時間課金分） | $17.7 |
+| Fargate 0.25vCPU / 0.5GB **× 2タスク** | $22.5 |
+| Public IPv4 × 4（タスク ENI ×2 ＋ ALB ノード ×2、$0.005/h） | $14.6 |
+| DynamoDB（オンデマンド、デモ規模） | 実質 $0 |
+
+**Public IPv4 課金は NAT を使わない選択から直接発生する。** NAT Gateway（$35/月）を避けた分がここに一部戻ってくるが、それでも NAT 構成より安い。
+ALB の LCU、CloudWatch Logs、Container Insights、CloudTrail の保存料は上表に含まない（デモ規模では小さいが、ゼロではない）。
+
+使わない間 `terraform destroy` すれば実質 1日 約 $1.8。
 
 **設計上の制約** — **NAT Gateway を使わない。** 教科書通りにプライベートサブネットへ置くと NAT だけで月 $35 かかり、アプリ本体より高くつく。タスクは public subnet に置く。
 
@@ -125,7 +140,11 @@ AWS のフロンティアエージェントは2つあり、守備範囲が分か
 
 ## D-004: 手作業はアカウント発行のみ。以降すべて Terraform
 
-**決定** — 手作業は「管理アカウントで CreateAccount する」の 1 ステップだけ。それ以降は Terraform が担当する。
+**決定** — **AWS リソースに関する**手作業は「管理アカウントで CreateAccount する」の 1 ステップだけ。それ以降の AWS 側はすべて Terraform が担当する。
+
+**例外（AWS の外側に残る手作業）** — GitHub App の認可と、ペネトレーションテストのターゲットドメイン検証は**ブラウザ操作が必須**で、Terraform では代替できない。
+これは [Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) に残る（[D-013](#d-013-委任された技術判断こちらで決定) でも同じ点に触れている）。
+「手作業はアカウント発行のみ」は **AWS 側について**の話であり、GitHub 側までは含まない。
 
 **入り方** — Organizations 経由で作ったメンバーアカウントには `OrganizationAccountAccessRole`（AdministratorAccess）が**自動生成される**。Terraform は管理アカウントの認証情報からこのロールを assume して入る。
 
@@ -199,13 +218,14 @@ AWS のフロンティアエージェントは2つあり、守備範囲が分か
 
 **理由** — 単一リージョンで完結し構成が単純になる。普段の作業リージョンと一致するため、コンソールを行き来する際の取り違え事故も減る。
 
-**引き受けたリスク** — Security Agent の**自動修復 PR が us-east-1 限定**である可能性。事実だった場合、観点3のうち「Security Agent に直させる」部分だけが実行できない。
+**当初の想定は誤りだった（2026-08-02 修正）** — 以前この項には「自動修復 PR が us-east-1 限定かもしれない」というリスクと、「Security Agent の Agent Space だけ us-east-1 に移す」という逃げ道を書いていた。**この逃げ道は成立しない。**
+自動修復の配信方式を決めるのは**リージョンではなくリポジトリ可視性**であり、[D-010](#d-010-github-リポジトリは-publicor-sasakidevops-agent-form) で Public を選んだ時点で、どのリージョンに置いても修正 PR は出ない（diff 添付になる）。
+→ そもそも自動修復は [D-014](#d-014-security-agent-の自動修復はスコープ外) でスコープ外としたため、**このリスクは消滅した。**
 
-**逃げ道（これがあるのでリスクを受容できる）**
+**残る唯一のリージョン制限** — DevOps Agent の **Release management（release readiness review / release testing）が us-east-1 のみ（preview）**。
 
-1. Phase 0 で**実機確認する**。制限の有無をここで確定させる
-2. 制限が事実だった場合 → **Security Agent の Agent Space だけ us-east-1 に置き直す**。Agent Space は作成リージョンに関わらず全リージョンのリソースを扱えるため、**アプリは東京のまま動かせる**。移設コストは小さい
-3. それも避けたい場合 → 指摘（PR コメント）までは東京で成立するので、修正は人間または DevOps Agent 側で行う
+ただし [D-001](#d-001-デモの到達目標を3つとも狙う) の3目標（RCA・コードバグの修正・CI/CD 失敗の調査）は、いずれも**全リージョン提供の Production operations と On-demand DevOps tasks に属する**ため、**東京で全て成立する。**
+Release management は今回のスコープに入っていない。将来これを試したくなったときだけ、us-east-1 に Agent Space を追加する。
 
 ---
 
@@ -255,7 +275,7 @@ Security Agent のペネトレーションテストは検証済みドメイン�
 
 キャンペーン型なら期間中は DNS 名が固定されるので、**検証は1回で済む**。
 
-**コスト** — 2週間で約 $13。DevOps Agent / Security Agent の無料トライアル枠（各2ヶ月）の中で十分に回せる。
+**コスト** — 2週間で **約 $26**（[D-002](#d-002-実行基盤は-ecs-fargate--alb--dynamodb) の月額 $55 ベース）。DevOps Agent / Security Agent の無料トライアル枠（各2ヶ月）の中で十分に回せる。
 
 **露出** — 脆弱なエンドポイントの公開期間が検証期間に限定される。[D-010](#d-010-github-リポジトリは-publicor-sasakidevops-agent-form) の緩和策4を満たす。
 
@@ -296,15 +316,42 @@ Security Agent のペネトレーションテストは検証済みドメイン�
 
 ---
 
+## D-014: Security Agent の自動修復はスコープ外
+
+**決定** — Security Agent の **Automated Remediation（自動修復）を今回のスコープから外す。**
+観点3で見るのは **PR コードレビューでの指摘** と **ペネトレーションテストでの実証** の2つまで。修正は人間が行う。
+
+**経緯** — 当初は [D-008](#d-008-リージョンは-ap-northeast-1-に統一) で「自動修復 PR が us-east-1 限定かもしれない」というリージョン問題として扱っていたが、これは**問題の捉え方が間違っていた**。
+
+実際には配信方式を決めるのはリポジトリ可視性で、**public リポジトリでは PR ではなく diff 添付**になる。
+つまり [D-010](#d-010-github-リポジトリは-publicor-sasakidevops-agent-form) で Public を選んだ時点で、**リージョンをどう動かしても修正 PR は出ない。**
+
+**帰結**
+
+- [D-008](#d-008-リージョンは-ap-northeast-1-に統一) の「引き受けたリスク」と逃げ道は無効化され、リスクごと消滅した
+- Phase 0 の確認項目から「自動修復が東京で使えるか」を削除（確認しても意味が無いため）
+- [01-fault-perspectives.md](./01-fault-perspectives.md) 観点3-1 の期待動作から「修正 PR」を削除
+- **Public を維持できる。** 自動修復のために private 化する動機が無くなった
+
+**却下** — 「自動修復を見るためにリポジトリを Private にする」。[D-010](#d-010-github-リポジトリは-publicor-sasakidevops-agent-form) を覆すほどの価値が無く、Public 前提の他の判断（露出管理・警告 README）まで巻き戻る。
+
+---
+
+## D-015: 予算上限は月 $100、通知は管理アカウントのメールへ
+
+**決定** — AWS Budgets を **月 $100** で設定し、**実績 50% / 80% / 100%** と**予測 100%** で `<ç®¡çã¢ã«ã¦ã³ãã®ã¡ã¼ã«ã¢ãã¬ã¹>` に通知する。
+
+**理由** — [D-002](#d-002-実行基盤は-ecs-fargate--alb--dynamodb) の実費見積りが月約 $55。上限を実費ちょうどに置くと通常運用で鳴り続けて無視する癖がつくため、約2倍を上限に取る。
+50% で「想定通り」、80% で「何かが余計に動いている」、100% で「止める判断」という3段階になる。
+
+**注意** — Budgets はあくまで**通知**であって遮断ではない。実際の停止は `terraform destroy`（[D-011](#d-011-撤収はキャンペーン型検証期間中は起動しっぱなし期間後に-destroy)）で行う。
+
+**前提条件** — [D-003](#d-003-専用の新規-aws-アカウントを発行する) で請求を管理アカウントに集約しているため、**デモアカウント側でコストデータが見えるかを Phase 0 で確認する。**
+メンバーアカウント自身の予算は作成できるが、Cost Explorer のリンクアカウントアクセスは管理アカウント側の設定に依存する。
+ペネトレーションテスト（$50/task-hour）は1回で上限の半分を消費しうるため、**実行前に無料トライアル残枠を必ず確認する。**
+
+---
+
 ## 未決事項
 
-**なし。** グリルで全項目を解消済み。以降で判断が必要になったものはここに追記する。
-
-- [ ] フォームの題材（何を入力させるフォームか）
-- [ ] フロントエンド／バックエンドの技術選定
-- [ ] CI/CD の担当範囲（アプリのみか、Terraform も回すか）
-- [ ] GitHub リポジトリ名・可視性・GitHub Actions の AWS 認証方式（OIDC 推奨）
-- [ ] Terraform の state バックエンドとディレクトリ構成
-- [ ] Agent Space を Terraform で作るか、コンソールで作るか
-- [ ] HTTPS / カスタムドメインの要否
-- [ ] 予算上限と撤収（destroy）の運用
+**なし。** D-001〜D-015 で全項目を解消済み。以降で判断が必要になったものは D-016 以降として追記する。
