@@ -81,5 +81,10 @@ jobs:
       # use_lockfile = true なので plan はロックオブジェクトを S3 に PutObject して削除する。
       # つまり plan が通れば state の読みだけでなく書きも通っている。
       # 権限が無ければ「Error acquiring the state lock」で落ちる。
+      #
+      # image_tag は default を持たない必須変数なので、渡さないと plan が止まる（Phase 2）。
+      # ここで github.sha を渡しておくのは、Phase 4 で apply を足すときと同じ値であり、
+      # 「Terraform がイメージタグを所有する」（D-013）形をそのまま先取りできるため。
+      # plan は ECR にイメージが実在するかを確かめないので、まだ push していなくても通る。
       - name: terraform plan
-        run: terraform plan -input=false -lock-timeout=5m
+        run: terraform plan -input=false -lock-timeout=5m -var image_tag=${{ github.sha }}

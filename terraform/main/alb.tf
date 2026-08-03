@@ -1,0 +1,99 @@
+resource "aws_lb" "main" {
+  name               = var.project
+  load_balancer_type = "application"
+  internal           = false
+  security_groups    = [aws_security_group.alb.id]
+  subnets            = aws_subnet.public[*].id
+
+  # ⚠️ false のままにする（既定値）。
+  # true にすると terraform destroy が弾かれ、D-011 の撤収手順が回らなくなる。
+  enable_deletion_protection = false
+
+  # アクセスログは S3 バケットが要るうえ、DevOps Agent が調査に使うのは
+  # CloudWatch のメトリクスとアプリの構造化ログ（observability.tf）。
+  # 検証期間 1週間（D-011）に対して置き場を増やす価値が無いので有効化しない。
+
+  tags = {
+    Name = var.project
+  }
+}
+
+resource "aws_lb_target_group" "app" {
+  name        = var.project
+  port        = var.container_port
+  protocol    = "HTTP"
+  vpc_id      = aws_vpc.main.id
+  target_type = "ip" # awsvpc の Fargate タスクは ENI の IP で登録される
+
+  # 既定の 300 秒だとデプロイのたびに5分待つことになる。
+  # 観点1・2 のデモは何度も回すので、待ち時間はそのまま検証速度に効く。
+  deregistration_delay = 30
+
+  health_check {
+    enabled = true
+    # ⚠️ 観点1-2 の仕込み先（fault-injection.tf）。
+    path                = local.health_check_path
+    protocol            = "HTTP"
+    matcher             = "200"
+    interval            = 15
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+  }
+
+  tags = {
+    Name = var.project
+  }
+}
+
+resource "aws_lb_listener" "http" {
+  load_balancer_arn = aws_lb.main.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  # HTTPS リスナーは作らない。ドメインが未定で ACM 証明書を発行できないため（D-007）。
+  # ドメインが決まったら、ここに 443 のリスナーを足し、80 はリダイレクトに変える。
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.app.arn
+  }
+}
+
+# --------------------------------------------------------------------------
+# ペネトレーションテストの HTTP_ROUTE 検証用ルート（Phase 5）
+# --------------------------------------------------------------------------
+#
+# AWS がターゲットドメイン検証で提示するパスにトークンを置き、HTTP で取得させる。
+# アプリ側ではなく ALB 側に置くのは、**アプリを再デプロイせずに値を差せる**ため。
+# 値が判明するのは Phase 5 のブラウザ操作の途中なので、この差が効く。
+#
+# 両方の変数が指定されたときだけ作られる。既定は null なので、通常は何も作られない。
+# 値の入れ方は「リポジトリ変数に設定して deploy.yml を再実行」（D-020 と同じ経路）。
+# ⚠️ ローカルから apply しない。apply 経路は CI 1本に保つ（D-009）。
+
+resource "aws_lb_listener_rule" "pentest_verification" {
+  count = var.pentest_verification_path != null && var.pentest_verification_token != null ? 1 : 0
+
+  listener_arn = aws_lb_listener.http.arn
+
+  # デフォルトアクション（アプリへの forward）より先に評価させる。
+  # アプリ側に同じパスのルートがあっても、検証はこのルールが確実に処理する。
+  priority = 1
+
+  condition {
+    path_pattern {
+      values = [var.pentest_verification_path]
+    }
+  }
+
+  action {
+    type = "fixed-response"
+
+    fixed_response {
+      content_type = "text/plain"
+      message_body = var.pentest_verification_token
+      status_code  = "200"
+    }
+  }
+}

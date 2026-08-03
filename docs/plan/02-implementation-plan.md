@@ -279,6 +279,12 @@ Phase 1 の実施中に追加した決定は5つ。
 
 ## Phase 2: インフラ本体を書く
 
+> **✅ 完了（2026-08-03）。** `AWS_PROFILE=devopsagent-tf` でローカルから `terraform plan` が通り、**45 リソースの作成計画**が出た。
+> `terraform fmt -check -recursive` と `terraform validate` も通っている。**apply はしていない**（下記の通り [Phase 4](#phase-4-cicd-の拡充) の CI が初回 apply を行う）。
+> 実測値は [00-decisions.md の Phase 2 の実機確認結果](./00-decisions.md#phase-2-の実機確認結果2026-08-03) を参照。
+>
+> このフェーズで確定した判断は **D-026〜D-033**。うち [D-031](./00-decisions.md#d-031-dynamodb-のスロットリング監視は-throttleevents-で行う) は**下のアラーム表を訂正している**。
+
 `terraform/main/` を**書く**フェーズ。**完了条件は `terraform plan` が通ることまで。**
 
 `var.image_tag` はまだ実在するイメージを指せないので、**plan を通すためだけのダミー値**（`"bootstrap"` 等）を渡す。
@@ -318,12 +324,15 @@ SG は ALB 用（`0.0.0.0/0:80`）と ECS 用（ALB からのみ）の2つ。
 |---|---|---|---|---|---|
 | ALB 5xx 率 | `HTTPCode_ELB_5XX_Count` ＋ `HTTPCode_Target_5XX_Count` | 合計 > 5 | 5分 × 1 | `notBreaching` | 1-1 / 2-2 |
 | ALB ターゲット応答時間 | `TargetResponseTime`（p95） | > 1.0 秒 | 5分 × 2 | `notBreaching` | 2-3 / 2-4 |
-| ALB 異常ホスト | `UnHealthyHostCount` | >= 1 | 1分 × 2 | **`breaching`** | 1-2 / 1-3 |
+| ALB 異常ホスト | `UnHealthyHostCount`（**`Minimum` 統計**） | >= 1 | 1分 × 2 | **`breaching`** | 1-2 / 1-3 |
 | ECS CPU 使用率 | `CPUUtilization` | > 80% | 1分 × 3 | `notBreaching` | 2-3 |
 | ECS メモリ使用率 | `MemoryUtilization` | > 80% | 1分 × 2 | `notBreaching` | 1-4 / 2-1 |
-| DynamoDB スロットリング | `ThrottledRequests` | >= 1 | 5分 × 1 | `notBreaching` | 1-5 / 2-4 |
+| DynamoDB スロットリング | ~~`ThrottledRequests`~~ → **`ReadThrottleEvents` ＋ `WriteThrottleEvents`** | >= 1 | 5分 × 1 | `notBreaching` | 1-5 / 2-4 |
+
+**DynamoDB の行は [D-031](./00-decisions.md#d-031-dynamodb-のスロットリング監視は-throttleevents-で行う) で訂正した。** `ThrottledRequests` のディメンションは公式ドキュメント上 `TableName, Operation` であり、`TableName` 単独で張ったアラームは**鳴らないまま `INSUFFICIENT_DATA` に留まりうる**。`notBreaching` と組み合わさると**設定してあるのに一度も鳴らないことに気づけない**ため、`TableName` 単独で成立すると明記されている `ThrottleEvents` 系に差し替えた。
 
 **異常ホストだけ `breaching`** にするのは、タスクが全滅するとメトリクス自体が欠損し、`notBreaching` では**最も重い障害が無音になる**ため。
+→ この理由は推測ではなかった。ALB の公式ドキュメントが `UnHealthyHostCount` の Reporting criteria を「Reported if there are registered targets」と明記している。統計に `Minimum` を使うのも AWS の推奨に従ったもので、根拠と引き受けた代償は [D-028](./00-decisions.md#d-028-異常ホストアラームは-minimum-統計で見る) にある。
 
 **ECS タスク停止は CloudWatch アラームではない** — EventBridge ルール（ECS Task State Change / `lastStatus = STOPPED`）から SNS へ流す**イベント通知**であり、閾値の概念が無い。
 `stoppedReason` に OOM や pull 失敗の理由が入るので、観点 1-4 / 1-6 では**アラームではなくこのイベントが根拠**になる。
@@ -348,6 +357,9 @@ Hono ＋ TypeScript ＋ JSX、Node 22。
 構造化 JSON ログにリクエスト ID と**コミット SHA** を含める。SHA が乗っていないと、Agent がログとコードを相関できない。
 
 **ペネトレーションテストの HTTP_ROUTE 検証用の口（アプリではなく ALB 側に置く）**
+
+> **✅ [Phase 2](#phase-2-インフラ本体を書く) で実装済み（[D-030](./00-decisions.md#d-030-ペンテスト検証用の-alb-リスナールールは-phase-2-で書く)）。この節に関して Phase 3 でやることは無い。**
+> 実体は `terraform/main/alb.tf` のリスナールールであって、TypeScript を1行も含まない。`alb.tf` を書いている最中にまとめて足した。
 
 [Phase 5](#phase-5-エージェント接続) のターゲットドメイン検証では、**AWS が提示するパスにトークンを配置して HTTP で取得させる**必要がある。
 上のルート表にはその口が無いので、**ALB のリスナールール（`fixed_response`）で用意する。**

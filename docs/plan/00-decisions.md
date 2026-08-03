@@ -2,11 +2,12 @@
 
 グリルセッションで確定した決定を、決まった順に記録する。用語は [CONTEXT.md](../../CONTEXT.md) に従う。
 
-**ステータス: 決定確定（D-001〜D-025）／未決事項なし／Phase 0・Phase 1 完了／検証期間は 2026-08-10 頃まで**
+**ステータス: 決定確定（D-001〜D-033）／未決事項なし／Phase 0・Phase 1・Phase 2 完了／検証期間は 2026-08-10 頃まで**
 2026-08-02 のグリルセッションで全項目を解消。同日の外部レビューを受けて D-014・D-015 を追加し、[D-002](#d-002-実行基盤は-ecs-fargate--alb--dynamodb) のコスト見積りと [D-008](#d-008-リージョンは-ap-northeast-1-に統一) のリスク認識を訂正した。
 同日の [Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) の実機確認で D-016・D-017 を追加し、[D-008](#d-008-リージョンは-ap-northeast-1-に統一) の「3目標すべて東京で成立する」という記述を**再度訂正した**（[D-017](#d-017-目標2-の到達点を-agent-ready-specification-に縮小する) を参照）。
 [Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) 完了時に D-018・D-019 を、Phase 1 の着手準備で D-020 を追加した。
-[Phase 1](./02-implementation-plan.md#phase-1-ブートストラップ--最小-ci) の実施中に、公開リポジトリへの露出に関する判断として D-021・D-022 を追加し、初回 push 直前の外部レビュー（Codex）の指摘を受けて D-023〜D-025 を追加した。以降に新しい判断が生じたら D-026 以降として追記する。
+[Phase 1](./02-implementation-plan.md#phase-1-ブートストラップ--最小-ci) の実施中に、公開リポジトリへの露出に関する判断として D-021・D-022 を追加し、初回 push 直前の外部レビュー（Codex）の指摘を受けて D-023〜D-025 を追加した。
+[Phase 2](./02-implementation-plan.md#phase-2-インフラ本体を書く) で `terraform/main/` を書く過程で D-026〜D-033 を追加し、**アラーム表のメトリクスを1件訂正した**（[D-031](#d-031-dynamodb-のスロットリング監視は-throttleevents-で行う)）。以降に新しい判断が生じたら D-034 以降として追記する。
 
 ---
 
@@ -325,6 +326,67 @@ No changes. Your infrastructure matches the configuration.
 
 **CI から S3 への PutObject 自体を直接観測してはいない。** CloudTrail は管理イベントのみで、S3 のデータイベントは有効にしていないため（有効にすると課金対象になる）。
 `terraform/main/` に実リソースが入る [Phase 4](./02-implementation-plan.md#phase-4-cicd-の拡充) の初回 apply で、state ファイルそのものが S3 に書かれることを直接確認できる。
+
+### Phase 2 の実機確認結果（2026-08-03）
+
+`terraform/main/` を書く過程で実際に測った値。すべて実測であり、推測は含まない。
+
+**解決されたプロバイダ** — `hashicorp/aws` **v6.57.1** ／ `hashicorp/awscc` **v1.95.0** ／ `hashicorp/time` **v0.14.0**。
+awscc は [Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) のスキーマ検証と**同じ v1.95.0 に解決した**ため、あの検証結果はそのまま有効である。`.terraform.lock.hcl` に固定して commit した。
+
+**完了条件の達成** — `AWS_PROFILE=devopsagent-tf` で `terraform plan` が通り、**45 リソースの作成計画**が出た。`terraform fmt -check -recursive` と `terraform validate` も通っている。
+[D-016](#d-016-デモアカウントへは-aws-login-で直接入る管理アカウントは経由しない) の `credential_process` 方式が、実リソースを含む構成でも成立することを確認した。
+
+**awscc のスキーマで、Phase 0 の記録より細かく判明したこと**
+
+| 対象 | 実測結果 |
+|---|---|
+| `awscc_securityagent_agent_space.aws_resources.vpcs` | **単一オブジェクトではなくリスト**（`NESTING=list`）。単一オブジェクトで書くと `validate` が `list of object required` で落ちる |
+| `awscc_devopsagent_association.configuration.git_hub.owner_type` | 許容値は **`"organization"` / `"user"` の小文字2値**。`"User"` と書くと `Invalid Attribute Value Match` で落ちる |
+| `awscc_devopsagent_agent_space.tags` | `NESTING=set`。`awscc_securityagent_agent_space.tags` は `NESTING=list`。**同じ `tags` でも型が違う** |
+| awscc プロバイダの `default_tags` | **存在しない。** aws プロバイダと違い、タグは各リソースに明示的に書く必要がある |
+| `awscc_securityagent_agent_space` の IAM 属性 | **無い。** Agent Space 側から app role / service role を指定する口は存在しない |
+
+**AWS マネージドポリシーの ARN（実在を `iam get-policy` で確認）**
+
+| ポリシー | ARN |
+|---|---|
+| `AIDevOpsAgentAccessPolicy` | `arn:aws:iam::aws:policy/AIDevOpsAgentAccessPolicy` |
+| `AIDevOpsOperatorAppAccessPolicy` | `arn:aws:iam::aws:policy/AIDevOpsOperatorAppAccessPolicy` |
+| `AmazonECSTaskExecutionRolePolicy` | **`arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy`** |
+
+> **ECS のものだけ `service-role/` 配下にある。** `service-role` を落とした ARN は `NoSuchEntity` になることを実際に確認した。
+> **これは plan では検出できない**（ARN は文字列として扱われる）ので、apply まで発覚しない種類の誤りである。
+
+**アカウントの現状（`iam list-roles` / `securityagent list-agent-spaces` で確認）**
+
+- **Security Agent の Agent Space `SandboxAgent` は削除済み。** `list-agent-spaces` が `{"agentSpaceSummaries": []}` を返した。[D-019](#d-019-先行作成した-agent-space-は削除しterraform-に作り直させる) の手作業は完了しており、[Phase 4](./02-implementation-plan.md#phase-4-cicd-の拡充) の初回 apply で名前が衝突する余地は無い
+- **Application 側の IAM ロールは `application-<timestamp>` という名前で既に存在する**（実値の末尾は伏せる。[D-022](#d-022-メールアドレスはリポジトリに置かない)）。`AWSSecurityAgentWebAppPolicy` がアタッチされ、`securityagent.amazonaws.com` を信頼している。
+  計画が書いていた `SecurityAgentAppRole-*` という名前ではなく、**コンソールが `application-<timestamp>` 形式で作っていた。**
+  → Terraform で同名を作る危険は無いが、**この既存ロールを Terraform で管理してはいけない**（[D-019](#d-019-先行作成した-agent-space-は削除しterraform-に作り直させる) の Application と同じ理由で二重管理になる）
+- `AWSServiceRoleForResourceExplorer` が**既に存在する**。DevOps Agent の Agent Space ロールに与える `iam:CreateServiceLinkedRole` は、それでも公式サンプル通り残してある（作成済みなら何もしない権限であり、外す理由が無い）
+
+**CloudWatch メトリクスについて公式ドキュメントで確認した事実**
+
+| 項目 | 確認内容 |
+|---|---|
+| 算術演算子の欠損値 | **「Missing values in a time series are treated as 0」**（[Metric math](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/using-metric-math.html)）。→ `m1+m2` なら片方が欠損してももう片方の値が出る。ALB の 5xx は片方だけ報告される状況が普通に起きるため、この性質に依存している |
+| `HTTPCode_ELB_5XX_Count` | Reporting criteria は **「There is a nonzero value」**。5xx が出ていなければメトリクス自体が存在しない |
+| `HTTPCode_Target_5XX_Count` / `UnHealthyHostCount` | Reporting criteria は **「Reported if there are registered targets」** |
+| `TargetResponseTime` | **「The most useful statistics are `Average` and `pNN.NN` (percentiles)」** → p95 は正しい使い方 |
+| `UnHealthyHostCount` の統計 | AWS が **`Minimum` を推奨**している（[D-028](#d-028-異常ホストアラームは-minimum-統計で見る) に原文を引用） |
+| ECS の `containerInsights` | 有効値は **`enhanced` / `enabled` / `disabled`** の3つ（[ClusterSetting](https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_ClusterSetting.html)）。本構成は `enhanced` |
+| DynamoDB の `ThrottledRequests` | ディメンションは **`TableName, Operation`**。[D-031](#d-031-dynamodb-のスロットリング監視は-throttleevents-で行う) でメトリクスごと差し替えた |
+
+**Cost Explorer — 🚧 まだ「課金が乗る」ことの確認にはなっていない**
+
+`ce:GetCostAndUsage`（2026-07-01〜2026-08-04、SERVICE 別）を実行し、**正常なレスポンスが返った**。ただし金額は 7月・8月とも `"0"` で `Groups` は空だった。
+
+> **これを「コストデータが見えない」とも「見える」とも読んではいけない。**
+> [Phase 1](./02-implementation-plan.md#phase-1-ブートストラップ--最小-ci) のリソースを作ったのは **2026-08-03（当日）**であり、
+> ①Cost Explorer の反映には遅延がある ②CloudTrail の証跡1本目は管理イベントなら無料で、S3 も数 MB なので**そもそも請求額がほぼゼロ**、
+> という2つの理由から、**$0 が返ること自体は正常な構成でも起こる。**
+> 判定にはインフラが実際に稼働した後の日次実績が要る。**[Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) の項目11 が本来の確認点である。**
 
 ### GitHub
 
@@ -997,9 +1059,154 @@ git rev-list --objects --all                    # 全 blob を直接 cat-file �
 
 ---
 
+## D-026: 故障注入は locals で効果値を算出する
+
+**決定** — [D-005](#d-005-故障は今は仕込まないただし3観点の余地を設計に残す) が要求する「変数ひとつで切り替えられる粒度」を、**`terraform/main/fault-injection.tf` の `locals` で効果値を1箇所に算出する**形で実現する。リソース自体は分岐させず、各 `.tf` が `local.fault_*` を読む。
+
+**理由**
+
+1. **何が壊れるかが1ファイルで読める。** 故障ごとに `.tf` をまたいで差分を追う必要がない。これは Agent ではなく**測る側（人間）の要件**で、デモ中に「今どこを壊しているか」を即答できないと Agent の答え合わせができない
+2. **`count` による生やし分けを最小にできる。** `count` でリソースごと切り替えると破棄と再作成が起きる。**ALB を作り直すと DNS 名が変わり、ペンテストのターゲット検証が失効する** — [D-011](#d-011-撤収はキャンペーン型検証期間中は起動しっぱなし期間後に-destroy) がキャンペーン型を選んだのと同じ理由がここでも効く
+3. **健全な既定値が三項演算子の else 側に必ず現れる。** `"none"` のとき何になるかの確認に他ファイルを開かなくてよい
+
+`count` を使うのは、**リソースの有無そのものが故障である**2件（観点1-3 の SG ingress、観点1-6 のデフォルトルート）だけに限った。
+
+**帰結** — 故障を足すときは `fault-injection.tf` に `local` を1つ足し、対応する `.tf` がそれを読む。**足したら必ず対応するアラームが鳴ることを確認する** — 鳴らない故障は[インシデント面](../../CONTEXT.md#インシデント面-incident-surface)の定義を満たさず、デモとして成立しない。
+
+---
+
+## D-027: ECS のサーキットブレーカーと自動ロールバックを無効にする
+
+**決定** — `aws_ecs_service` の `deployment_circuit_breaker` を `enable = false` / `rollback = false` で**明示的に**書く。
+
+**理由** — 有効にすると、**故障を仕込んだデプロイを ECS が自動で切り戻す。**
+[インシデント面](../../CONTEXT.md#インシデント面-incident-surface) の定義は「鳴る・残る・繋がる」であり、**壊れた状態が続いてアラームが鳴り続ける**ことが観点1・2 のデモの前提になっている。自動回復すると、そもそも Agent に調査させる対象が消える。
+
+同じ理由で次の2つも置いていない。
+
+| 置かないもの | 理由 |
+|---|---|
+| コンテナ単位のヘルスチェック | ECS がタスクを勝手に差し替え、仕込んだ故障が自己回復する。加えて `node:22-slim` に `curl` / `wget` が無い |
+| `wait_for_steady_state` | 故障を仕込むと steady state に到達せず、**apply が延々とブロックする**。デプロイ完了待ちは [Phase 4](./02-implementation-plan.md#phase-4-cicd-の拡充) の `deploy.yml` 側で行う（そちらならタイムアウトを制御できる） |
+
+**⚠️ これはサンドボックス固有の判断である。** 本番環境なら3つとも逆の設定にするのが正しい。
+**Terraform の既定値と一致していても明示的に書く**のは、既定に流されたのではなく意図した選択だと分かるようにするため。
+
+---
+
+## D-028: 異常ホストアラームは Minimum 統計で見る
+
+**決定** — `UnHealthyHostCount` のアラームを **`Minimum` 統計**で張る。欠損データは計画通り **`breaching`** のままとする。
+
+**理由（ALB の公式ドキュメントで確認した事実）** — [CloudWatch metrics for your Application Load Balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-cloudwatch-metrics.html) を 2026-08-03 に直接確認した。原文:
+
+> We recommend you monitor for non-zero `UnHealthyHostCount` in the `Minimum` statistic, and alarm on non-zero value for more than one data point. Using the `Minimum` will detect when targets are considered unhealthy by every node and Availability Zone of your load balancer.
+
+`Minimum` は **LB ノード間**の最小値であって**ターゲット間**の最小値ではない。したがって「2台のうち1台だけ落ちた」場合も、全ノードがそう見ていれば `1` が出て鳴る。[D-013](#d-013-委任された技術判断こちらで決定) が desired = 2 を選んだ狙いは損なわれない。
+計画の「>= 1 / 1分 × 2」は、この推奨の「non-zero」「more than one data point」とそのまま一致する。
+
+**`breaching` の根拠が裏付けられた** — 同ドキュメントの Reporting criteria は `UnHealthyHostCount` について **「Reported if there are registered targets」**。
+つまり**タスクが全滅して登録ターゲットが1つも無い状態では、メトリクスそのものが消える。** 計画が「異常ホストだけ `breaching`」とした理由（全滅が無音になる）は、推測ではなく文書化された挙動だった。
+
+**引き受けた代償** — 同ページには「Elastic Load Balancing reports metrics to CloudWatch **only when requests are flowing through the load balancer**」ともある。
+→ **誰もアクセスしていない時間帯に、このアラームが ALARM に落ちることがある。**
+「全滅を見逃す」より「静かなときに鳴る」ほうがましだと判断した。ただし**これは実測ではなく文書からの予測**であり、実際にどう振れるかは [Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) で観測して必要なら閾値ごと見直す。
+
+---
+
+## D-029: エージェントの GitHub 連携は既定で無効にする
+
+**決定** — DevOps Agent・Security Agent とも、GitHub リポジトリの紐づけを **`var.connect_github_to_agents`（既定 `false`）**で囲い、既定では作らない。
+
+**理由** — **GitHub App の認可はブラウザ操作でしか行えず（[D-004](#d-004-手作業はアカウント発行のみ以降すべて-terraform) の例外）、[Phase 4](./02-implementation-plan.md#phase-4-cicd-の拡充) の初回 apply は必ず認可より前に来る。**
+既定で有効にすると、存在しない連携を参照して**初回 apply がその場で落ちる**。これは [D-019](#d-019-先行作成した-agent-space-は削除しterraform-に作り直させる) で `awscc_securityagent_application` を `resource` として書いてはいけないと決めたのと**同じ形の失敗**である — 「Terraform の外で先に成立していなければならないもの」を Terraform に書くと初回 apply が壊れる。
+
+**有効化の手順は既存の経路に揃える** — [Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) で認可を済ませた後、リポジトリ変数を足して `deploy.yml` を再実行する。
+ペンテスト検証用の値（[D-030](#d-030-ペンテスト検証用の-alb-リスナールールは-phase-2-で書く)）と**まったく同じ入れ方**になるので、手順が1つで済む。**ローカル apply は使わない**（[D-009](#d-009-アプリも-terraform-も-ci-から-apply-する完全-gitops)）。
+
+**未確認のまま残る点** — DevOps Agent 側の association に渡す `service_id` の実値が分からない。
+AWS アカウント紐付けはリテラル `"aws"` だと確認済みだが、GitHub 連携が何になるかは**スキーマからは読めない**。コードには暫定で `"github"` と書いてあるが、**これは確認した値ではない。** [Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) で実機確認して直す。
+
+---
+
+## D-030: ペンテスト検証用の ALB リスナールールは Phase 2 で書く
+
+**決定** — `var.pentest_verification_path` / `var.pentest_verification_token` と、それを返す `fixed_response` のリスナールールを、**[Phase 3](./02-implementation-plan.md#phase-3-アプリ) ではなく [Phase 2](./02-implementation-plan.md#phase-2-インフラ本体を書く) の `terraform/main/alb.tf` に置く**。
+
+**理由** — 計画はこれを Phase 3（アプリ）の節に書いていたが、**実体はアプリではなく ALB のリスナールールである。**
+Phase 3 は `app/` のコードを書くフェーズで、このルールは1行も TypeScript を含まない。`alb.tf` を書いている最中に同じファイルの別ルールとして足すほうが、後から `alb.tf` を開き直すより安全で、リスナーとの優先度の関係もその場で決まる。
+
+**分割損が無いことを確認した** — 両変数の既定は `null` で、**指定されない限りリソースは1つも作られない**（`count = 0`）。
+[D-007](#d-007-ドメインは決め打ちしない) の `domain_name` と同じ「未指定でも成立する任意変数」の形なので、Phase 2 に前倒ししても Phase 3・Phase 4 の内容は変わらない。
+
+**Phase 3 に残るもの** — 無い。この項目に関して [Phase 3](./02-implementation-plan.md#phase-3-アプリ) がやることは無くなった。
+
+---
+
+## D-031: DynamoDB のスロットリング監視は ThrottleEvents で行う
+
+**決定** — アラームのメトリクスを、計画の表にある **`ThrottledRequests` から `ReadThrottleEvents` ＋ `WriteThrottleEvents` の合算に差し替える。**
+
+**理由（DynamoDB の公式ドキュメントで確認した事実）** — [DynamoDB Metrics and dimensions](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/metrics-dimensions.html) を 2026-08-03 に直接確認した。
+
+- **`ThrottledRequests` のディメンションは `TableName, Operation`** と記載されている
+- 同じページは `SystemErrors`（同じく `TableName, Operation`）について明示的に警告している。原文: 「DynamoDB publishes `SystemErrors` only on the `TableName` and `Operation` dimension pair. It does not publish this metric on `TableName` alone. **A CloudWatch alarm that specifies only the `TableName` dimension never matches data and remains in the `INSUFFICIENT_DATA` state**, so specify both `TableName` and `Operation`.」
+- 一方 `ReadThrottleEvents` / `WriteThrottleEvents` には **「The `TableName` dimension returns the ... for the table」**と明記されている。**`TableName` 単独で成立することが文書化されている**
+
+> **`ThrottledRequests` が `TableName` 単独で動かないと確認したわけではない。** 上の警告が書かれているのは `SystemErrors` の項であって `ThrottledRequests` の項ではない。
+> 確認できたのは「**`TableName` 単独で成立すると文書に書かれているのは ThrottleEvents 側だけ**」ということであり、これは[D-017](#d-017-目標2-の到達点を-agent-ready-specification-に縮小する)と同じ「裏付けが取れるほうを採る」判断である。
+
+**この差し替えを重く見る理由** — 外れたときの失敗が**静か**だからである。
+アラームが `INSUFFICIENT_DATA` のまま鳴らず、かつ `treat_missing_data = "notBreaching"` なので、**「設定してあるのに一度も鳴らない」ことに気づけない。** 観点1-5・2-4 のデモが成立しなくなるまで発覚しない種類の誤りなので、文書上の裏付けが厚いほうを採った。
+
+**代替案の却下** — **`ThrottledRequests` に `Operation` を固定する。** ディメンション要件は満たせるが、`PutItem` / `Scan` ごとにアラームが増え、**アラーム定義がアプリの実装に結合する。** アプリが使う API を変えるたびにアラームを直すことになる。
+
+**副次的な利点** — 読み書きのどちらが詰まっているかまで分かる。観点1-5（書き込みスロットリング）と観点2-4（N+1 による読み込み急増）の切り分けがアラームの段階で付く。
+
+---
+
+## D-032: イメージタグは default を持たない必須変数にする
+
+**決定** — `terraform/main` の `var.image_tag` に **default を置かない**。`deploy.yml` の `terraform plan` にも `-var image_tag=${{ github.sha }}` を渡す。
+
+**理由** — default があると、**CI が `-var` を渡し忘れたときに「古い、あるいは存在しないタグ」で apply が静かに成功する。**
+イメージタグはデプロイとコードを相関させる要（[観点2](./01-fault-perspectives.md#観点2-アプリコード起因)の必須要件）なので、**間違った値で通るより渡し忘れで止まるほうがよい。** 失敗の向きを安全側に倒す判断で、[D-023](#d-023-oidc-の信頼ポリシーは不変形式の-sub-に切り替える) の「一致しなければ拒否されるだけ」と同じ考え方である。
+
+**`deploy.yml` を Phase 2 で触った理由** — [Phase 1](./02-implementation-plan.md#phase-1-ブートストラップ--最小-ci) の `deploy.yml` は `-var` を渡していないため、**この変更を入れると次の push で CI が落ちる。**
+Phase 4 を待たずに1行足したのは、[Phase 1](./02-implementation-plan.md#phase-1-ブートストラップ--最小-ci) の成果物である「CI が動いている」状態を壊さないため。
+渡す値が `github.sha` なのは [Phase 4](./02-implementation-plan.md#phase-4-cicd-の拡充) の apply と同じ値であり、**`plan` は ECR にイメージが実在するかを確認しない**ので、push 前でも通る。
+
+**ローカルから plan するときは `-var image_tag=bootstrap` を付ける。** [Phase 2](./02-implementation-plan.md#phase-2-インフラ本体を書く) が言う「plan を通すためだけのダミー値」がこれにあたる。
+
+---
+
+## D-033: bootstrap の state はスナップショットを S3 に置く
+
+**決定** — `terraform/bootstrap/terraform.tfstate` を **`s3://or-sasaki-devops-agent-form-tfstate/bootstrap-backup/terraform.tfstate` に一度だけコピーする。** バックエンドの移行はしない。
+
+**背景** — bootstrap の state は[ローカルにしか無く](#d-013-委任された技術判断こちらで決定)、`.gitignore` で除外されている。失うと 14 リソースが**孤児化**する（作り直しは可能だが名前が衝突する）。要否は未決のままだった。
+
+**なぜ移行ではなくスナップショットなのか**
+
+| 案 | 判断 |
+|---|---|
+| **何もしない** | 却下。孤児化したら 14 リソースをコンソールから手で消すことになる |
+| **スナップショットを1回置く（採用）** | bootstrap は [Phase 1](./02-implementation-plan.md#phase-1-ブートストラップ--最小-ci) で完成しており、**以後変更する予定が無い。** 継続同期の価値が低い |
+| **S3 バックエンドへ移行する** | 却下。バックエンドを変えると bootstrap 側も `devopsagent-tf` プロファイルが要るようになり（[D-016](#d-016-デモアカウントへは-aws-login-で直接入る管理アカウントは経由しない)）、**完成して動いている層を検証期間の直前に触ることになる。** state バケット自身の state をそのバケットに置く循環も生じる |
+
+**この対策が守る範囲を正しく述べる** — 守れるのは**ローカルの喪失**（ディスク障害・誤削除・作業ディレクトリの取り違え）だけである。
+**バケットごと失う事故は守れない**（同じバケットに置いているため）。ただしバケットにはバージョニングとパブリックアクセスブロックが有効で、[撤収手順](./02-implementation-plan.md#コストと撤収)が言う通り `terraform destroy` では消えない。
+
+**⚠️ この state にはメールアドレスが含まれる。** `budget_notification_email`（[D-015](#d-015-予算上限は月-100通知は管理アカウントのメールへ)）が値として入っている。
+[D-022](#d-022-メールアドレスはリポジトリに置かない) が禁じているのは**リポジトリに置くこと**であって、同一アカウント内の非公開 S3 バケットに置くことではない。パブリックアクセスブロックが4項目とも `true` であることを確認したうえで実施した。**このバケットを公開設定にしてはいけない。**
+
+**bootstrap を変更したら取り直すこと。** 自動同期はしていないので、スナップショットは古くなりうる。
+
+---
+
 ## 未決事項
 
-**判断事項は無い。** D-001〜D-025 で解消済み。新しい判断が生じたら D-026 以降として追記する。
+**判断事項は無い。** D-001〜D-033 で解消済み。新しい判断が生じたら D-034 以降として追記する。
 
 ### 未確認のまま残っている事実
 
@@ -1010,6 +1217,10 @@ git rev-list --objects --all                    # 全 blob を直接 cat-file �
   **確認が要るのは「残枠」のほう。** 使い切っていればペンテスト1回 $50/task-hour が実費になり、[D-015](#d-015-予算上限は月-100通知は管理アカウントのメールへ) の上限 $100 の半分を消費しうる
 - **`devops-agent get-account-usage` が `AccessDenied` になる理由** — 同じ `aidevops` 名前空間の他 API は通るので名前空間ごとの deny ではない。仮説は①オンボード前は使えない ②使用量は請求データなので管理アカウント側にしか出ない ③ルートユーザー固有の制限。
   **2026-08-03 に Security Agent を有効化した後も `AccessDenied` のままだった**が、これは①を否定しない — **`get-account-usage` は `devops-agent` の API であり、DevOps Agent 側の Agent Space はまだ存在しない**ため。[Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) で DevOps Agent の Agent Space を作った後に再試行すれば①を切り分けられる
-- **コストデータに実際の課金が乗ってくるか** — `ce:GetCostAndUsage` は正常に応答するが、アカウントが新品で支出ゼロのため金額の正しさは未検証。[Phase 1](./02-implementation-plan.md#phase-1-ブートストラップ--最小-ci) 以降に再確認する
-- **DevOps Agent の GitHub 連携を Terraform でどこまで書けるか**（[awscc プロバイダのスキーマ検証](#awscc-プロバイダのスキーマ検証phase-0-項目5) を参照）。[Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) で確認する
+- **コストデータに実際の課金が乗ってくるか** — [Phase 2](./02-implementation-plan.md#phase-2-インフラ本体を書く) で再実行したが**まだ判定できない**。`ce:GetCostAndUsage` は正常に応答するものの金額は `0` のままで、これは①反映遅延 ②Phase 1 のリソースの請求額がそもそもほぼゼロ、で説明がつく。
+  → **インフラが実際に稼働した後でなければ測れない。[Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) の項目11 で確認する**
+- **DevOps Agent の GitHub 連携を Terraform でどこまで書けるか**（[awscc プロバイダのスキーマ検証](#awscc-プロバイダのスキーマ検証phase-0-項目5) を参照）。[Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) で確認する。
+  → **[Phase 2](./02-implementation-plan.md#phase-2-インフラ本体を書く) で書く口だけは用意した**（[D-029](#d-029-エージェントの-github-連携は既定で無効にする)、既定は無効）。
+  **`awscc_devopsagent_association` に渡す GitHub 用の `service_id` の実値は依然として不明で、コード中の `"github"` は確認した値ではない**
+- **`UnHealthyHostCount` のアラームが、トラフィックの無い時間帯に ALARM へ落ちるか** — [D-028](#d-028-異常ホストアラームは-minimum-統計で見る) で `breaching` の代償として引き受けたが、**実際の振れ方は文書からの予測であって実測ではない。** [Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) で観測する
 - **`awscc_securityagent_target_domain` で HTTP_ROUTE 検証まで完了できるか** — 検証パスとトークンは computed 属性で読めるが、検証の完了を Terraform が待てるかは不明。成立すれば [Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) のブラウザ操作が1つ減る

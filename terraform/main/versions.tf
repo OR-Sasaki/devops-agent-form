@@ -1,6 +1,28 @@
 terraform {
   required_version = ">= 1.13.0"
 
-  # Phase 2 で required_providers（aws ＋ awscc >= 1.66.0）をここに足す。
-  # Phase 1 の時点ではプロバイダを使うリソースが1つも無いので、宣言しない。
+  required_providers {
+    aws = {
+      source = "hashicorp/aws"
+      # aws login の認証情報を読めるのは 6.23.0 以降（D-016）。
+      # bootstrap 側と同じ制約に揃えてある。
+      version = ">= 6.23.0"
+    }
+
+    awscc = {
+      source = "hashicorp/awscc"
+      # DevOps Agent / Security Agent のリソースを含む版。
+      # Phase 0 のスキーマ検証はこの制約で解決した v1.95.0 に対して行った。
+      version = ">= 1.66.0"
+    }
+
+    # Agent Space 作成時に IAM ロールの信頼ポリシーが検証されるため、
+    # IAM 作成との間に伝播待ちを挟む（AWS 公式サンプルと同じ構成）。
+    time = {
+      source  = "hashicorp/time"
+      version = ">= 0.11.0"
+    }
+  }
+
+  # backend は backend.tf に分けてある（S3 ＋ use_lockfile = true）。
 }

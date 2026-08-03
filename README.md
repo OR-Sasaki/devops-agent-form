@@ -34,8 +34,11 @@ AWS の2つのフロンティアエージェントに「実際に壊れたシス
 
 ## 現在の状態
 
-**構築の途中です。** `terraform/bootstrap/`（state バケット・OIDC・ECR・CloudTrail・予算）だけが作られており、
-`terraform/main/`（ネットワーク・ALB・ECS・DynamoDB）と `app/` はまだ空です。
+**構築の途中です。** AWS 上に**実在するのは `terraform/bootstrap/` の分だけ**（state バケット・OIDC・ECR・CloudTrail・予算）で、
+`terraform/main/`（ネットワーク・ALB・ECS・DynamoDB・アラーム・Agent Space）は**コードは揃っているがまだ apply していません**。`app/` は空です。
+
+`terraform/main/` の初回 apply は CI が行います。**アプリのイメージが ECR に無い状態で apply すると ECS タスクが起動できない**ため、
+「build & push → apply」の順で走る CI（Phase 4）が最初の apply になります。
 どこまで進んだかは [docs/plan/02-implementation-plan.md](./docs/plan/02-implementation-plan.md) の各 Phase の進捗表を見てください。
 
 **この時点でのコードに、意図的な脆弱性はまだ入っていません。** 冒頭の警告は、
