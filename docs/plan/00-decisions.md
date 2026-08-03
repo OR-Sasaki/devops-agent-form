@@ -2,12 +2,13 @@
 
 グリルセッションで確定した決定を、決まった順に記録する。用語は [CONTEXT.md](../../CONTEXT.md) に従う。
 
-**ステータス: 決定確定（D-001〜D-034）／未決事項なし／Phase 0・Phase 1・Phase 2 完了／検証期間は 2026-08-10 頃まで**
+**ステータス: 決定確定（D-001〜D-036）／未決事項なし／Phase 0・Phase 1・Phase 2・Phase 3・Phase 4 完了／検証期間は 2026-08-10 頃まで**
 2026-08-02 のグリルセッションで全項目を解消。同日の外部レビューを受けて D-014・D-015 を追加し、[D-002](#d-002-実行基盤は-ecs-fargate--alb--dynamodb) のコスト見積りと [D-008](#d-008-リージョンは-ap-northeast-1-に統一) のリスク認識を訂正した。
 同日の [Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) の実機確認で D-016・D-017 を追加し、[D-008](#d-008-リージョンは-ap-northeast-1-に統一) の「3目標すべて東京で成立する」という記述を**再度訂正した**（[D-017](#d-017-目標2-の到達点を-agent-ready-specification-に縮小する) を参照）。
 [Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) 完了時に D-018・D-019 を、Phase 1 の着手準備で D-020 を追加した。
 [Phase 1](./02-implementation-plan.md#phase-1-ブートストラップ--最小-ci) の実施中に、公開リポジトリへの露出に関する判断として D-021・D-022 を追加し、初回 push 直前の外部レビュー（Codex）の指摘を受けて D-023〜D-025 を追加した。
-[Phase 2](./02-implementation-plan.md#phase-2-インフラ本体を書く) で `terraform/main/` を書く過程で D-026〜D-033 を追加し、**アラーム表のメトリクスを1件訂正した**（[D-031](#d-031-dynamodb-のスロットリング監視は-throttleevents-で行う)）。初回コミット後の外部レビュー（7回目）を受けて D-034 を追加した。以降に新しい判断が生じたら D-035 以降として追記する。
+[Phase 2](./02-implementation-plan.md#phase-2-インフラ本体を書く) で `terraform/main/` を書く過程で D-026〜D-033 を追加し、**アラーム表のメトリクスを1件訂正した**（[D-031](#d-031-dynamodb-のスロットリング監視は-throttleevents-で行う)）。初回コミット後の外部レビュー（7回目）を受けて D-034 を追加した。
+[Phase 3](./02-implementation-plan.md#phase-3-アプリ)・[Phase 4](./02-implementation-plan.md#phase-4-cicd-の拡充) の着手時に、計画が決めていなかった2件（`/admin` の認証と fork からの PR の扱い）を D-035・D-036 として決めた。以降に新しい判断が生じたら D-037 以降として追記する。
 
 ---
 
@@ -1252,9 +1253,123 @@ ECR の pull が落ちるのは**次にタスクを起動しようとしたと�
 
 ---
 
+## D-035: ベースラインには観点3 の故障を1つも置かない
+
+**決定** — [Phase 3](./02-implementation-plan.md#phase-3-アプリ) で書くアプリのベースラインは、**[01-fault-perspectives.md](./01-fault-perspectives.md) の[観点3](./01-fault-perspectives.md#観点3-セキュリティ起因) に挙がっている項目を1つも含まない状態**にする。
+具体的には **`/admin` に Basic 認証を付け、セキュリティヘッダを出す。**
+
+**この判断が要った理由** — 計画のルート表は `GET /admin` を「送信一覧」とだけ書いており、**認証の有無を決めていなかった。**
+一方 [観点3-4](./01-fault-perspectives.md#観点3-セキュリティ起因) は「認証・認可のない管理エンドポイント」を**故障として**挙げている。
+認証なしの `/admin` を最初から置くと、**それ自体が観点3-4 を先に仕込んだことになる。**
+
+これは [D-005](#d-005-故障は今は仕込まないただし3観点の余地を設計に残す)（故障は今は仕込まない）に反し、かつ [Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) 項目10 の前提を壊す。
+項目10 は「この時点のコードに脆弱性は無い」ことを前提に、**Security Agent が `No issues identified.` とコメントすれば合格**としている。
+脆弱性が実在すれば指摘が返るのが正しい動作であり、**そのとき「接続できている」と「問題が無い」の区別がつかなくなる。**
+
+**観点3 の各項目をベースラインでどう扱うか**
+
+| # | 故障 | ベースラインの実装 | 仕込むときに触る場所 |
+|---|---|---|---|
+| 3-1 | XSS | `hono/jsx` が `{}` の値を自動エスケープする。`raw()` を使わない | `app/src/admin.tsx` |
+| 3-2 | インジェクション | `Scan` に `FilterExpression` を使わない。式を文字列連結で作らない | `app/src/submit.ts` / `db.ts` |
+| 3-3 | ハードコードされたシークレット | 置かない。管理者パスワードは Terraform 生成 → SSM SecureString → ECS `secrets` | — |
+| 3-4 | 認証なしの管理エンドポイント | **`/admin` に Basic 認証**。認証情報が無いときは 503 で閉じる | `app/src/admin.tsx` の `adminAuth` |
+| 3-5 | 過剰な CORS | CORS ミドルウェアを**入れない**（同一オリジンのみ） | `app/src/index.tsx` |
+| 3-6 | レート制限なし | **入れない（下記）** | — |
+| 3-7 | セキュリティヘッダ欠如 | `hono/secure-headers` ＋ `default-src 'none'` の CSP | `app/src/index.tsx` |
+
+**⚠️ 3-6（レート制限）だけは例外として、ベースラインに入れない。**
+
+**他の観点のデモを阻害するため。** 観点1-5（DynamoDB のスロットリング）・[観点2-3](./01-fault-perspectives.md#観点2-アプリコード起因)（レイテンシ悪化）・観点2-4（N+1）は、いずれも **`POST /submit` に負荷をかけて発現させる**設計になっている。
+レート制限を入れると、故障を仕込んだ後に**その故障を発現させられなくなる。**
+
+> **これは「ベースラインに観点3 の故障を1つも置かない」という原則を1件破っている。**
+> 破っていることを承知のうえで、代償を比べて選んだ。
+> **[Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) 項目10 で Security Agent がレート制限の欠如を指摘した場合、それは「指摘として妥当」であり、接続失敗ではない。**
+> 判定は「`No issues identified.` が返るか」ではなく「**コメントが付くか**」で行い、内容がレート制限のみなら合格とする。
+> 項目10 の本来の価値は「コメントが付かない = 接続できていない」を切り分けることにあり、そこは損なわれない。
+
+**管理者パスワードの持ち方**
+
+パスワードをどこに置くかで、**別の故障（3-3）を仕込んでしまう**危険がある。次の経路にした。
+
+```
+random_password（Terraform が生成）
+  → aws_ssm_parameter（SecureString・既定の AWS マネージドキー）
+  → ECS の container_definitions.secrets で ADMIN_PASSWORD として注入
+```
+
+- **リポジトリには平文が1文字も残らない。** ハードコードすれば 3-3 そのものになる
+- **タスク定義にも平文が残らない。** `environment` に置くと `describe-task-definition` とコンソールから読めてしまう。`secrets` なら参照（ARN）しか残らない
+- **`terraform plan` の出力にも出ない。** `random_password.result` と `aws_ssm_parameter.value` はどちらも sensitive として `(sensitive value)` に伏せられる（実測で確認）。[Phase 4](./02-implementation-plan.md#phase-4-cicd-の拡充) の `pr.yml` は plan を**公開リポジトリの PR にコメントする**ので、これは必須の性質だった
+- ユーザー名（`var.admin_username`、既定 `admin`）は秘密ではないので平文でよい
+
+**実行ロールに要る権限は `ssm:GetParameters` だけである。**
+ECS の公式ドキュメント [Amazon ECS task execution IAM role](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_execution_IAM_role.html) の「Secrets Manager or Systems Manager permissions」を 2026-08-03 に直接確認した。原文:
+
+> `kms:Decrypt` — **Required only if your secret uses a customer managed key and not the default key.** The ARN for your custom key should be added as a resource.
+
+`key_id` を指定していない = 既定の AWS マネージドキー（`alias/aws/ssm`）なので、KMS の許可は要らない。
+
+**引き受けたリスク** — **タスクが起動しない原因が1つ増える。**
+実行ロールが `ssm:GetParameters` を持たないと、タスクは `ResourceInitializationError` で起動に失敗する。
+[Phase 4](./02-implementation-plan.md#phase-4-cicd-の拡充) が警戒している3つの原因（`assign_public_ip` の指定漏れ・イメージのアーキテクチャ違い・`image_tag` の不一致）に4つ目が加わる。
+
+> **ただし症状は混ざらない。** `stoppedReason` の文字列が `CannotPullContainerError` とは別物（`unable to pull secrets or registry auth`）なので、区別はつく。
+> あわせて `aws_ecs_service` の `depends_on` に IAM ポリシーを明示し、**権限が揃う前にタスクが起動を試みる**順序そのものを潰した。
+
+**却下**
+
+- **認証なしの `/admin` を置き、観点3-4 は「最初から仕込まれている」ものとして扱う** — 実装は最も軽い。だが [D-005](#d-005-故障は今は仕込まないただし3観点の余地を設計に残す)（器だけ作り、弾は後から込める）を1件だけ破ることになり、**破った1件が [Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) 項目10 の判定基準と正面から衝突する**
+- **パスワードを `environment` に平文で渡す** — SSM も IAM ポリシーも要らず、タスク起動の失敗要因が増えない。だが値がタスク定義に残り、**「シークレットを環境変数に平文で置いている」こと自体が指摘対象になりうる。** 3-3 を避けたつもりで別の形の 3-3 を作る
+- **ALB のリスナールールで `/admin` を塞ぐ** — アプリを触らずに済むが、観点3-4 の仕込み先が Terraform 側へ移る。[D-012](#d-012-アプリは-hono--typescript題材は問い合わせフォーム-admin-一覧) は `/admin` の一覧表示を**アプリ側の**仕込み先と決めており、そこがずれる
+
+---
+
+## D-036: fork からの PR では AWS を使うジョブを実行しない
+
+**決定** — `pr.yml` の `terraform plan` ジョブに `if: github.event.pull_request.head.repo.full_name == github.repository` を付け、**同一リポジトリのブランチから出た PR でだけ実行する。**
+app の lint / typecheck / test / build と、terraform の fmt / validate は**誰の PR でも走らせる。**
+
+**理由** — **リポジトリは Public なので、誰でも fork から PR を出せる**（[D-010](#d-010-github-リポジトリは-publicor-sasakidevops-agent-form)）。
+`pull_request` イベントの fork 由来の実行には **OIDC トークンもシークレットも渡らない**（GitHub の仕様）。したがって AWS を使うステップは**必ず失敗する。**
+
+**失敗すること自体は安全側である。** 権限が漏れるのではなく、単に assume できないだけ。
+問題は判定のほうで、**「CI が赤い」が常態化すると [Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) の受け入れ確認が濁る。** 特に項目10（Security Agent が PR にコメントするか）は PR を1本出して見る項目なので、既に赤い CI と混ざると読み取りにくい。
+
+**ジョブを3つに割る形にした。** 1つのジョブの中でステップ単位に `if` を散らすより、
+「AWS が要るか要らないか」の境界がジョブ境界と一致していたほうが、後から見て分かる。
+
+| ジョブ | AWS 認証情報 | fork からの PR |
+|---|---|---|
+| `app` | 不要 | **走る** |
+| `terraform-check`（fmt / validate） | 不要（`init -backend=false`） | **走る** |
+| `terraform-plan` | 必要（OIDC） | **走らない**（skip） |
+
+`terraform validate` に認証情報が要らないのは、`init -backend=false` で S3 バックエンドへ接続せず
+プロバイダのスキーマだけを取得できるため。**fork からの PR でも Terraform の構文エラーは捕まる。**
+
+**⚠️ `pull_request_target` は使わない。**
+fork のコードをベースリポジトリの権限で走らせるイベントで、これを使えば fork からでも plan は通る。
+だが **このワークフローが触れるのは `AdministratorAccess` を持つロールである**（[D-009](#d-009-アプリも-terraform-も-ci-から-apply-する完全-gitops)）。
+第三者が書いた `terraform/` や `app/` を、その権限が届く文脈で評価させる構成は、[D-024](#d-024-サードパーティ-action-は完全長のコミット-sha-で固定する) が action の固定にまで気を使っている水準と釣り合わない。
+**得られるのは「fork の PR でも plan が見える」という利便性だけで、代償が大きすぎる。**
+
+**引き受けた代償** — fork からの PR では、**Terraform の変更が実際に何を作り変えるかを CI が見せない。**
+`main` へ入れる前に plan を見たければ、レビュー側でブランチをこのリポジトリに引き取って PR を出し直す。
+検証期間が約1週間（[D-011](#d-011-撤収はキャンペーン型検証期間中は起動しっぱなし期間後に-destroy)）で、外部からの PR を想定していないため、この代償は実質ゼロである。
+
+**あわせて決めたこと（同じワークフロー内の細部）**
+
+- **PR の `terraform plan` は `-lock=false` で回す。** plan は state を書かない読み取り専用の操作である一方、`main` への push で走る `deploy.yml` の apply は**10分以上ロックを保持しうる**。ロックを取りに行くと、PR の plan が apply の裏で待たされて無意味に落ちる
+- **plan 結果のコメントは `gh pr comment` で行う。** `actions/github-script` 等を足すと [D-024](#d-024-サードパーティ-action-は完全長のコミット-sha-で固定する) で SHA 固定すべき依存が増える。`gh` は `ubuntu-latest` にプリインストールされている
+- **plan の出力は 55000 バイトで切り詰める。** GitHub のコメント上限は 65536 文字で、48 リソースの plan は容易に超える。全文は Actions のログに残す
+
+---
+
 ## 未決事項
 
-**判断事項は無い。** D-001〜D-034 で解消済み。新しい判断が生じたら D-035 以降として追記する。
+**判断事項は無い。** D-001〜D-036 で解消済み。新しい判断が生じたら D-037 以降として追記する。
 
 ### 未確認のまま残っている事実
 

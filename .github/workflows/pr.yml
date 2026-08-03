@@ -1,0 +1,224 @@
+# PR に対する検査。app の lint / typecheck / test / build と、
+# terraform の fmt / validate / plan（結果を PR にコメント）。
+#
+# ⚠️ fork からの PR の扱い（D-036）
+#
+#   このリポジトリは Public なので、誰でも fork から PR を出せる。
+#   pull_request イベントの fork 由来の実行には **OIDC トークンもシークレットも渡らない**
+#   （GitHub の仕様）。terraform plan のジョブはそこで必ず失敗する。
+#
+#   失敗すること自体は安全側だが、「CI が常に赤い」が常態化すると Phase 6 の判定が濁る。
+#   そこで **AWS が要るジョブだけを同一リポジトリ由来の PR に限定**し、
+#   app の検査と terraform の fmt / validate は誰の PR でも走らせる。
+#
+#   ⚠️ pull_request_target は使わない。fork のコードを書き込み権限つきで走らせることになり、
+#      AdministratorAccess のロールを持つこのリポジトリでは危険が大きすぎる。
+
+name: pr
+
+on:
+  pull_request:
+    branches: [main]
+
+# 既定は読み取りのみ。plan をコメントするジョブでだけ pull-requests: write に上げる。
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: ap-northeast-1
+  TF_VERSION: 1.13.0
+
+jobs:
+  app:
+    name: app
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        working-directory: app
+
+    # ⚠️ action は完全長のコミット SHA で固定する（D-024）。actions/* も例外にしない。
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          # Dockerfile の node:22-slim と揃える。ずれると「ローカルで通るのに本番で落ちる」が起きる。
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      - name: lint
+        run: npm run lint
+
+      - name: typecheck
+        run: npm run typecheck
+
+      - name: test
+        run: npm test
+
+      - name: build
+        run: npm run build
+
+      # ⚠️ push はしない。ここでの目的は Dockerfile が壊れていないことの確認だけである。
+      #    イメージを ECR に載せるのは main へのマージ後（deploy.yml）で、
+      #    「デプロイ = terraform apply」の一本道を崩さない（D-009）。
+      - name: docker build (no push)
+        run: docker build --platform linux/amd64 --tag devops-agent-form:pr .
+
+  terraform-check:
+    name: terraform fmt & validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # AWS 認証情報が要らないので fork からの PR でも走る（D-036）。
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive
+
+      # -backend=false にすると S3 バックエンドへ接続せずプロバイダだけ取得する。
+      # validate に必要なのはプロバイダのスキーマだけなので、認証情報が要らない。
+      - name: terraform validate
+        run: |
+          set -euo pipefail
+          for dir in terraform/bootstrap terraform/main; do
+            echo "::group::$dir"
+            terraform -chdir="$dir" init -backend=false -input=false
+            terraform -chdir="$dir" validate
+            echo "::endgroup::"
+          done
+
+  terraform-plan:
+    name: terraform plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # ⚠️ fork からの PR では OIDC トークンが発行されないので、このジョブは実行しない（D-036）。
+    if: github.event.pull_request.head.repo.full_name == github.repository
+
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write # plan 結果を PR にコメントするため
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check AWS_ROLE_ARN is set
+        env:
+          AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+        run: |
+          if [ -z "$AWS_ROLE_ARN" ]; then
+            echo "::error::リポジトリ変数 AWS_ROLE_ARN が未設定です（D-020）。"
+            exit 1
+          fi
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: gha-${{ github.run_id }}
+          mask-aws-account-id: true
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: terraform init
+        working-directory: terraform/main
+        run: terraform init -input=false
+
+      - name: terraform plan
+        id: plan
+        working-directory: terraform/main
+        run: |
+          set -uo pipefail
+
+          # ⚠️ -lock=false にする理由 — plan は state を書かない読み取り専用の操作である。
+          #    一方 main への push で走る deploy.yml の apply は 10 分以上ロックを保持しうる。
+          #    ロックを取りに行くと、PR の plan が apply の裏で待たされて無意味に落ちる。
+          #
+          #    image_tag は default を持たない必須変数なので必ず渡す（D-032）。
+          #    plan は ECR にイメージが実在するかを確かめないので、未 push の SHA でも通る。
+          exit_code=0
+          terraform plan -no-color -input=false -lock=false \
+            -var "image_tag=${{ github.event.pull_request.head.sha }}" \
+            > plan.txt 2>&1 || exit_code=$?
+          echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+
+          # 常にログにも出す。コメントが投稿できなかったときの逃げ道になる。
+          cat plan.txt
+          exit 0
+
+      - name: Comment the plan on the PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EXIT_CODE: ${{ steps.plan.outputs.exit_code }}
+        working-directory: terraform/main
+        run: |
+          set -euo pipefail
+
+          if [ "$EXIT_CODE" = "0" ]; then status="✅ 成功"; else status="❌ 失敗 (exit $EXIT_CODE)"; fi
+
+          # GitHub のコメントは 65536 文字が上限。plan の出力はリソースが増えると簡単に超える。
+          limit=55000
+          note=""
+          if [ "$(wc -c < plan.txt)" -gt "$limit" ]; then
+            note="> ⚠️ 出力が長いため先頭 ${limit} バイトで切り詰めています。全文は Actions のログにあります。"
+          fi
+
+          {
+            echo "### terraform plan (\`terraform/main\`)"
+            echo
+            echo "commit \`${HEAD_SHA}\` / ${status}"
+            echo
+            # ⚠️ [ -n "$note" ] && echo ... と書くと、note が空のときリスト全体が
+            #    非ゼロで終わり、set -e がここでスクリプトを止める。if で書くこと。
+            if [ -n "$note" ]; then echo "$note"; echo; fi
+            echo "<details><summary>plan の出力</summary>"
+            echo
+            echo '```terraform'
+            head -c "$limit" plan.txt
+            echo
+            echo '```'
+            echo
+            echo "</details>"
+          } > comment.md
+
+          # 同じ PR に何度も push されるたびにコメントが増えるのは読みにくいので、
+          # 前回の bot コメントがあれば書き換える。無ければ新規作成にフォールバックする。
+          gh pr comment "$PR_NUMBER" --body-file comment.md --edit-last \
+            || gh pr comment "$PR_NUMBER" --body-file comment.md
+
+      # コメントを投稿してから、plan の結果でジョブの成否を決める。
+      - name: Fail if the plan failed
+        if: steps.plan.outputs.exit_code != '0'
+        run: |
+          echo "::error::terraform plan が失敗しました（exit ${{ steps.plan.outputs.exit_code }}）。PR のコメントを参照してください。"
+          exit 1

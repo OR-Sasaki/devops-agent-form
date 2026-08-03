@@ -64,6 +64,17 @@ variable "container_port" {
   default     = 3000
 }
 
+variable "admin_username" {
+  description = <<-EOT
+    /admin の Basic 認証のユーザー名（D-035）。**秘密ではない**ので平文で持つ。
+
+    パスワードのほうはここに置かない。Terraform が random_password で生成し、
+    SSM Parameter Store の SecureString 経由で ECS の secrets として注入する（ecs.tf）。
+  EOT
+  type        = string
+  default     = "admin"
+}
+
 # --------------------------------------------------------------------------
 # ネットワーク
 # --------------------------------------------------------------------------

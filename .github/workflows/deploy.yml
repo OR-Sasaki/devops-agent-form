@@ -1,8 +1,16 @@
-# Phase 1 の最小版。目的は OIDC と S3 バックエンドの疎通確認だけで、
-# インフラを作ることではない（terraform/main/ はまだ空）。
+# main への push で「イメージを焼いて push → terraform apply → デプロイ完了待ち」を行う。
 #
-# Phase 4 でここに build & push・apply・デプロイ完了待ちを足す。
-# ゼロから作り直すのではなく、このファイルを拡張する。
+# Phase 1 で作った最小版（OIDC 疎通確認だけ）を Phase 4 で拡張したもの。
+#
+# ⚠️ 順序が重要である（D-009）。
+#
+#     OIDC で assume → docker build & push（タグ = コミット SHA）
+#       → terraform apply -var image_tag=<SHA> → ECS デプロイ完了待ち
+#
+#   Terraform にイメージタグを所有させるので drift が出ない。そして
+#   **デプロイ = terraform apply** になるため、観点1（AWS 設定起因）と
+#   観点2（コード起因）が同じ1本のデプロイイベントとして Agent から見える。
+#   build を先に置くのは、apply の時点でイメージが実在している必要があるため。
 
 name: deploy
 
@@ -15,7 +23,7 @@ permissions:
   id-token: write # OIDC トークンの発行に必須。これが無いと assume できない
   contents: read
 
-# apply を足した後に同時実行されると state のロック待ちで詰まるため、今のうちから直列化しておく
+# apply が同時に走ると state のロック待ちで詰まるので直列化する
 concurrency:
   group: deploy
   cancel-in-progress: false
@@ -23,17 +31,19 @@ concurrency:
 env:
   AWS_REGION: ap-northeast-1
   TF_VERSION: 1.13.0
+  # bootstrap 側の ECR リポジトリ名。var.project と同じ規約で決まっている
+  ECR_REPOSITORY: devops-agent-form
 
 jobs:
-  terraform:
-    name: terraform init & plan
+  deploy:
+    name: build & apply
     runs-on: ubuntu-latest
 
-    defaults:
-      run:
-        working-directory: terraform/main
+    # ⚠️ 短く切らないこと。ALB の作成だけで 3〜5 分、Agent Space の前段に time_sleep 30 秒、
+    #    ECS の安定待ちが最大 10 分かかる。初回 apply は 45 リソースを作る。
+    timeout-minutes: 45
 
-    # ⚠️ サードパーティ action は必ず完全長のコミット SHA で固定する。
+    # ⚠️ サードパーティ action は必ず完全長のコミット SHA で固定する（D-024）。
     # このジョブは AdministratorAccess のロールを assume するため、
     # タグ参照だとタグの付け替えや配布元の侵害でアカウントを丸ごと奪われる。
     # 更新するときはタグから SHA を引き直し、横のコメントも一緒に直すこと。
@@ -59,7 +69,8 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: gha-${{ github.run_id }}
-          # Actions のログも公開されるため、アカウント ID をマスクする
+          # Actions のログも公開されるため、アカウント ID をマスクする。
+          # ECR のレジストリ URI にもアカウント ID が入るので、この設定が効いている必要がある。
           mask-aws-account-id: true
 
       # ARN もアカウント ID もログに出さずに assume の成否だけを見る
@@ -68,23 +79,141 @@ jobs:
           aws sts get-caller-identity > /dev/null
           echo "OIDC assume: OK"
 
+      # ⚠️ docker/login-action は使わない（D-024）。
+      #    サードパーティ action を1つ増やすと、SHA で固定すべき依存が1つ増える。
+      #    AWS CLI は ubuntu-latest にプリインストール済みなので、これで足りる。
+      - name: Log in to Amazon ECR
+        id: ecr
+        run: |
+          set -euo pipefail
+          registry_uri="$(aws ecr describe-repositories \
+            --repository-names "$ECR_REPOSITORY" \
+            --query 'repositories[0].repositoryUri' --output text)"
+          aws ecr get-login-password --region "$AWS_REGION" \
+            | docker login --username AWS --password-stdin "${registry_uri%%/*}"
+          echo "repository_uri=$registry_uri" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push the image
+        env:
+          REPOSITORY_URI: ${{ steps.ecr.outputs.repository_uri }}
+        run: |
+          set -euo pipefail
+          # ⚠️ --platform linux/amd64 を明示する。
+          #    ecs.tf が runtime_platform.cpu_architecture = "X86_64" を固定しているので、
+          #    arm64 のイメージを push するとタスクが exec format error で起動しない。
+          #    ubuntu-latest は x86_64 なので既定でも一致するが、runner が変わったときに
+          #    静かに壊れるより、明示して食い違いで落ちるほうがよい。
+          docker build --platform linux/amd64 \
+            --tag "$REPOSITORY_URI:$GITHUB_SHA" \
+            app
+          docker push "$REPOSITORY_URI:$GITHUB_SHA"
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
 
-      # S3 バックエンドから state を読めることの確認
       - name: terraform init
+        working-directory: terraform/main
         run: terraform init -input=false
 
-      # use_lockfile = true なので plan はロックオブジェクトを S3 に PutObject して削除する。
-      # つまり plan が通れば state の読みだけでなく書きも通っている。
-      # 権限が無ければ「Error acquiring the state lock」で落ちる。
-      #
-      # image_tag は default を持たない必須変数なので、渡さないと plan が止まる（Phase 2）。
-      # ここで github.sha を渡しておくのは、Phase 4 で apply を足すときと同じ値であり、
-      # 「Terraform がイメージタグを所有する」（D-013）形をそのまま先取りできるため。
-      # plan は ECR にイメージが実在するかを確かめないので、まだ push していなくても通る。
-      - name: terraform plan
-        run: terraform plan -input=false -lock-timeout=5m -var image_tag=${{ github.sha }}
+      - name: terraform apply
+        working-directory: terraform/main
+        env:
+          PENTEST_VERIFICATION_PATH: ${{ vars.PENTEST_VERIFICATION_PATH }}
+          PENTEST_VERIFICATION_TOKEN: ${{ vars.PENTEST_VERIFICATION_TOKEN }}
+          CONNECT_GITHUB_TO_AGENTS: ${{ vars.CONNECT_GITHUB_TO_AGENTS }}
+        run: |
+          set -euo pipefail
+
+          # ⚠️ 未設定のリポジトリ変数を -var で渡してはいけない。
+          #    未設定の変数は空文字として渡ってくるが、空文字は null ではないので
+          #    variables.tf の validation に落ちる（pentest_verification_path は
+          #    「/ で始まること」を要求している）。渡さなければ default の null が効く。
+          args=(-input=false -auto-approve -lock-timeout=10m -var "image_tag=${GITHUB_SHA}")
+
+          if [ -n "${PENTEST_VERIFICATION_PATH}" ]; then
+            args+=(-var "pentest_verification_path=${PENTEST_VERIFICATION_PATH}")
+          fi
+          if [ -n "${PENTEST_VERIFICATION_TOKEN}" ]; then
+            args+=(-var "pentest_verification_token=${PENTEST_VERIFICATION_TOKEN}")
+          fi
+          # Phase 5 で GitHub App の認可を済ませた後に true にする（D-029）。
+          # 認可より前に true にすると、存在しない連携を参照して apply が落ちる。
+          if [ "${CONNECT_GITHUB_TO_AGENTS}" = "true" ]; then
+            args+=(-var "connect_github_to_agents=true")
+          fi
+
+          terraform apply "${args[@]}"
+
+      - name: Wait for the ECS deployment to stabilise
+        id: wait
+        working-directory: terraform/main
+        run: |
+          set -euo pipefail
+          cluster="$(terraform output -raw ecs_cluster_name)"
+          service="$(terraform output -raw ecs_service_name)"
+          # 失敗時の診断ステップから参照するので、待つ前に出しておく
+          {
+            echo "cluster=$cluster"
+            echo "service=$service"
+          } >> "$GITHUB_OUTPUT"
+
+          # ⚠️ 待ちは必ず有限にする。
+          #    サーキットブレーカーと自動ロールバックを無効にしている（D-027）ので、
+          #    壊れたイメージを push するとサービスは**永遠に安定しない**。
+          #    aws ecs wait services-stable は 15 秒 × 40 回（約 10 分）で諦めて非ゼロを返すが、
+          #    それに依存せず timeout も重ねる。
+          timeout 780 aws ecs wait services-stable --cluster "$cluster" --services "$service"
+
+      # ⚠️ タスクが起動しないときの原因は見分けがつきにくい（assign_public_ip の指定漏れ /
+      #    イメージのアーキテクチャ違い / image_tag の不一致 / 実行ロールの権限不足）。
+      #    stoppedReason とサービスイベントさえ取れれば大半はその場で切り分けられるので、
+      #    失敗時に必ず吐かせる。
+      - name: ECS diagnostics (on failure)
+        if: failure()
+        env:
+          CLUSTER: ${{ steps.wait.outputs.cluster }}
+          SERVICE: ${{ steps.wait.outputs.service }}
+        run: |
+          set +e
+          cluster="${CLUSTER:-devops-agent-form}"
+          service="${SERVICE:-devops-agent-form}"
+
+          echo "::group::service status"
+          aws ecs describe-services --cluster "$cluster" --services "$service" \
+            --query 'services[0].{desired:desiredCount,running:runningCount,pending:pendingCount,deployments:deployments[].{status:status,rollout:rolloutState,reason:rolloutStateReason,desired:desiredCount,running:runningCount,failed:failedTasks}}'
+          echo "::endgroup::"
+
+          echo "::group::recent service events"
+          aws ecs describe-services --cluster "$cluster" --services "$service" \
+            --query 'services[0].events[0:20].[createdAt,message]' --output text
+          echo "::endgroup::"
+
+          echo "::group::stopped tasks"
+          task_arns="$(aws ecs list-tasks --cluster "$cluster" --service-name "$service" \
+            --desired-status STOPPED --query 'taskArns' --output text)"
+          if [ -n "$task_arns" ] && [ "$task_arns" != "None" ]; then
+            # shellcheck disable=SC2086
+            aws ecs describe-tasks --cluster "$cluster" --tasks $task_arns \
+              --query 'tasks[].{stoppedReason:stoppedReason,stopCode:stopCode,lastStatus:lastStatus,containers:containers[].{name:name,reason:reason,exitCode:exitCode}}'
+          else
+            echo "停止したタスクはありません（そもそも起動していない可能性があります）"
+          fi
+          echo "::endgroup::"
+
+      - name: Summary
+        if: always()
+        working-directory: terraform/main
+        run: |
+          set +e
+          url="$(terraform output -raw alb_url 2>/dev/null)"
+          {
+            echo "## deploy"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| image tag | \`${GITHUB_SHA}\` |"
+            echo "| app | ${url:-（未取得）} |"
+          } >> "$GITHUB_STEP_SUMMARY"
