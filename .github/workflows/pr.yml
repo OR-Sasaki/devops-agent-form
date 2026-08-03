@@ -186,10 +186,18 @@ jobs:
 
           if [ "$EXIT_CODE" = "0" ]; then status="✅ 成功"; else status="❌ 失敗 (exit $EXIT_CODE)"; fi
 
+          # データソースの Reading / Read complete 行は毎回同じで読む価値が無いうえ、
+          # 出力の先頭を占めるので落とす。切り詰めで本文が消えるのを避けるため。
+          grep -vE '^(data\.|module\.).*: (Reading|Read complete)' plan.txt > body.txt || cp plan.txt body.txt
+
+          # ⚠️ 一番読みたい「Plan: N to add, ...」は出力の**末尾**にある。
+          #    切り詰めると真っ先に消えるので、本文とは別に抜き出して先頭へ置く。
+          summary="$(grep -E '^(Plan:|No changes|Apply complete|Error:)' plan.txt | head -5 || true)"
+
           # GitHub のコメントは 65536 文字が上限。plan の出力はリソースが増えると簡単に超える。
           limit=55000
           note=""
-          if [ "$(wc -c < plan.txt)" -gt "$limit" ]; then
+          if [ "$(wc -c < body.txt)" -gt "$limit" ]; then
             note="> ⚠️ 出力が長いため先頭 ${limit} バイトで切り詰めています。全文は Actions のログにあります。"
           fi
 
@@ -198,13 +206,19 @@ jobs:
             echo
             echo "commit \`${HEAD_SHA}\` / ${status}"
             echo
+            if [ -n "$summary" ]; then
+              echo '```'
+              echo "$summary"
+              echo '```'
+              echo
+            fi
             # ⚠️ [ -n "$note" ] && echo ... と書くと、note が空のときリスト全体が
             #    非ゼロで終わり、set -e がここでスクリプトを止める。if で書くこと。
             if [ -n "$note" ]; then echo "$note"; echo; fi
             echo "<details><summary>plan の出力</summary>"
             echo
             echo '```terraform'
-            head -c "$limit" plan.txt
+            head -c "$limit" body.txt
             echo
             echo '```'
             echo
