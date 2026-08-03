@@ -33,9 +33,13 @@ jobs:
       run:
         working-directory: terraform/main
 
+    # ⚠️ サードパーティ action は必ず完全長のコミット SHA で固定する。
+    # このジョブは AdministratorAccess のロールを assume するため、
+    # タグ参照だとタグの付け替えや配布元の侵害でアカウントを丸ごと奪われる。
+    # 更新するときはタグから SHA を引き直し、横のコメントも一緒に直すこと。
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # AWS_ROLE_ARN が未設定だと configure-aws-credentials が
       # 「認証情報が無い」という分かりにくいエラーで落ちるので、先に潰す（D-020）
@@ -49,7 +53,7 @@ jobs:
           fi
 
       - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:
           # ロール ARN にはアカウント ID が含まれる。Public リポジトリなので直書きしない（D-020）
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
@@ -65,7 +69,7 @@ jobs:
           echo "OIDC assume: OK"
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false

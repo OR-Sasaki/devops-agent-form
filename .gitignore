@@ -10,6 +10,13 @@
 .terraform/
 *.tfvars
 *.tfvars.json
+
+# 保存プラン。中身は state と同等（全リソースの属性が入る）ので commit してはいけない。
+# terraform plan -out=tfplan は本プロジェクトで実際に使う手順なので、拡張子なしの名前も明示的に潰す。
+tfplan
+*.tfplan
+*.tfplan.*
+
 crash.log
 crash.*.log
 override.tf

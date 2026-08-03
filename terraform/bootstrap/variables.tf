@@ -39,6 +39,22 @@ variable "github_repository" {
   }
 }
 
+variable "github_owner_id" {
+  description = "GitHub オーナーの数値 ID。gh api users/<owner> --jq .id で取得する（D-023）"
+  type        = number
+  default     = 15667196 # OR-Sasaki
+}
+
+variable "github_repo_id" {
+  description = <<-EOT
+    GitHub リポジトリの数値 ID。gh api repos/<owner>/<repo> --jq .id で取得する（D-023）。
+    リポジトリを作るまで存在しないので、初回 apply の時点では null でよい。
+    null の間は不変形式（repo:OWNER@ID/REPO@ID:*）の sub を信頼ポリシーに含めない。
+  EOT
+  type        = number
+  default     = null
+}
+
 variable "budget_limit_usd" {
   description = "月次の予算上限（D-015）"
   type        = string
@@ -46,7 +62,15 @@ variable "budget_limit_usd" {
 }
 
 variable "budget_notification_email" {
-  description = "予算アラートの通知先（D-015）"
+  description = <<-EOT
+    予算アラートの通知先（D-015）。管理アカウントのメールアドレス。
+    default を置かない — Public リポジトリなのでメールアドレスを平文で載せない（D-022）。
+    実値は gitignore 済みの terraform.tfvars に置く。
+  EOT
   type        = string
-  default     = "<ç®¡çã¢ã«ã¦ã³ãã®ã¡ã¼ã«ã¢ãã¬ã¹>"
+
+  validation {
+    condition     = can(regex("^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$", var.budget_notification_email))
+    error_message = "budget_notification_email はメールアドレス形式で指定すること。"
+  }
 }

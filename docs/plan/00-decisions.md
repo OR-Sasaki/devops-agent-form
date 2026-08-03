@@ -2,10 +2,11 @@
 
 グリルセッションで確定した決定を、決まった順に記録する。用語は [CONTEXT.md](../../CONTEXT.md) に従う。
 
-**ステータス: 決定確定（D-001〜D-020）／未決事項なし／Phase 0 完了（項目6 は Phase 5 へ移送）／検証期間は 2026-08-10 頃まで**
+**ステータス: 決定確定（D-001〜D-025）／未決事項なし／Phase 0 完了（項目6 は Phase 5 へ移送）／Phase 1 実施中／検証期間は 2026-08-10 頃まで**
 2026-08-02 のグリルセッションで全項目を解消。同日の外部レビューを受けて D-014・D-015 を追加し、[D-002](#d-002-実行基盤は-ecs-fargate--alb--dynamodb) のコスト見積りと [D-008](#d-008-リージョンは-ap-northeast-1-に統一) のリスク認識を訂正した。
 同日の [Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) の実機確認で D-016・D-017 を追加し、[D-008](#d-008-リージョンは-ap-northeast-1-に統一) の「3目標すべて東京で成立する」という記述を**再度訂正した**（[D-017](#d-017-目標2-の到達点を-agent-ready-specification-に縮小する) を参照）。
-[Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) 完了時に D-018・D-019 を、Phase 1 の着手準備で D-020 を追加した。以降に新しい判断が生じたら D-021 以降として追記する。
+[Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) 完了時に D-018・D-019 を、Phase 1 の着手準備で D-020 を追加した。
+[Phase 1](./02-implementation-plan.md#phase-1-ブートストラップ--最小-ci) の実施中に、公開リポジトリへの露出に関する判断として D-021・D-022 を追加し、初回 push 直前の外部レビュー（Codex）の指摘を受けて D-023〜D-025 を追加した。以降に新しい判断が生じたら D-026 以降として追記する。
 
 ---
 
@@ -93,8 +94,8 @@ pnpm・bun は**無し**。
 
 | profile | アカウント | 状態 |
 |---|---|---|
-| `default` | <æ¢å­ã¡ã³ãã¼ A>（`redacted-iam-user`） | **アクセスキーが失効している**（`InvalidClientTokenId`）。使えない |
-| `<å¥ã¢ã«ã¦ã³ãã®ãã­ãã¡ã¤ã«>` | <æ¢å­ã¡ã³ãã¼ B>（`user/developer`） | 有効。メンバーアカウントなので `DescribeOrganization` は通るが `CreateAccount` 等の管理アカウント専用 API は届かない |
+| `default` | <既存メンバー A>（IAM ユーザー） | **アクセスキーが失効している**（`InvalidClientTokenId`）。使えない |
+| `<別アカウントのプロファイル>` | <既存メンバー B>（IAM ユーザー） | 有効。メンバーアカウントなので `DescribeOrganization` は通るが `CreateAccount` 等の管理アカウント専用 API は届かない |
 | `devopsagent` | 308513050613（デモアカウント） | [D-016](#d-016-デモアカウントへは-aws-login-で直接入る管理アカウントは経由しない) で新設。`aws login` 済み（`arn:aws:iam::308513050613:root`）。`aws configure list` の TYPE が `login` であることを確認済み |
 | `devopsagent-tf` | 同上 | Terraform 用。`credential_process` で `devopsagent` から認証情報を受け取る。**S3 バックエンドを使うときはこちら**（下記参照） |
 
@@ -142,14 +143,14 @@ AWS のフロンティアエージェントは2つあり、守備範囲が分か
 
 ### AWS Organizations
 
-2026-08-02 に `aws organizations describe-organization` を `<å¥ã¢ã«ã¦ã³ãã®ãã­ãã¡ã¤ã«>` プロファイルから実行して再確認した（メンバーアカウントからでも組織の基本情報は読める）。
+2026-08-02 に `aws organizations describe-organization` を 別アカウントのプロファイルから実行して再確認した（メンバーアカウントからでも組織の基本情報は読める）。
 
 | 項目 | 値 |
 |---|---|
 | 組織 ID | `o-xxxxxxxxxx` |
-| 管理アカウント | **<ç®¡çã¢ã«ã¦ã³ã ID>**（`<ç®¡çã¢ã«ã¦ã³ãã®ã¡ã¼ã«ã¢ãã¬ã¹>`） |
+| 管理アカウント | **<管理アカウント ID>**（ルートのメールアドレスは伏せる。[D-022](#d-022-メールアドレスはリポジトリに置かない) 参照） |
 | FeatureSet | `ALL` |
-| 既存メンバー | <æ¢å­ã¡ã³ãã¼ A>（`redacted-iam-user`）、<æ¢å­ã¡ã³ãã¼ B>（`developer`） |
+| 既存メンバー | <既存メンバー A>、<既存メンバー B>（どちらも本プロジェクトと無関係） |
 | **デモアカウント** | **308513050613** — [D-003](#d-003-専用の新規-aws-アカウントを発行する) の専用アカウント。**発行済み** |
 | SCP | **ENABLED** — 新アカウントは OU/ルートの SCP を継承する |
 
@@ -168,10 +169,10 @@ AWS のフロンティアエージェントは2つあり、守備範囲が分か
 
 | 項目 | 値 |
 |---|---|
-| Application | `app-966a2407-â¦`（名前 `SecurityAgent`） |
-| Agent Space | `as-d363b56d-â¦`（名前 **`SandboxAgent`**）、`ap-northeast-1`、作成 2026-08-03T04:52:20Z |
+| Application | `app-966a2407-…`（名前 `SecurityAgent`） |
+| Agent Space | `as-d363b56d-…`（名前 **`SandboxAgent`**）、`ap-northeast-1`、作成 2026-08-03T04:52:20Z |
 | Target Domain | 未登録（`targetDomainIds: []`） |
-| ウェブアプリ URL | `app-966a2407-....securityagent.global.app.aws` |
+| ウェブアプリ URL | `app-<id>.securityagent.global.app.aws` |
 
 **コンソール上の各機能の状態**（スクリーンショットで確認）
 
@@ -262,6 +263,38 @@ CLI からは取得できなかった。試したもの:
 → **コンソールで確認するしかない可能性が高い。** [Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) はペンテスト実行直前の再確認を要求しており、そこで必ず見ることになる。
 **ペンテストは $50/task-hour で予算上限 $100（[D-015](#d-015-予算上限は月-100通知は管理アカウントのメールへ)）の半分を1回で消費しうるため、残枠が読めないまま実行してはいけない。**
 
+### Phase 1 の実機確認結果（2026-08-03）
+
+`terraform/bootstrap/` の apply とその前後で実際に測った値。すべて実測であり、推測は含まない。
+
+**解決されたプロバイダ** — `hashicorp/aws` **v6.57.1**（`>= 6.23.0` の制約で解決）。`.terraform.lock.hcl` に固定して commit した。
+
+**apply で作られたもの（14 リソース）** — S3 バケット2つ（state / CloudTrail 証跡）、GitHub OIDC プロバイダ、IAM ロール＋`AdministratorAccess` のアタッチ、ECR リポジトリ、CloudTrail、AWS Budgets、および S3 の付随設定（バージョニング・暗号化・パブリックアクセスブロック・バケットポリシー）。
+
+| 項目 | 実測結果 |
+|---|---|
+| **IAM ロールの `description` に日本語を書くと落ちる** | `CreateRole` が `ValidationError: Value at 'description' failed to satisfy constraint: Member must satisfy regular expression pattern: [\u0009\u000A\u000D\u0020-\u007E\u00A1-\u00FF]*` を返した。**ASCII 印字可能文字と Latin-1 補助しか通らない。** リソース名やタグ値ではなく `description` 固有の制約。→ 英語に書き換えて解決 |
+| **`aws_iam_openid_connect_provider` に `thumbprint_list` は不要** | 省略したまま `validate` と `apply` が通った（aws プロバイダ v6.57.1）。GitHub の OIDC は AWS 側が自前の信頼済み CA で TLS を検証するため、指定しても使われない |
+| **Budgets は ap-northeast-1 のプロバイダのまま作成できた** | us-east-1 のエイリアスプロバイダを足さずに `aws_budgets_budget` の作成が成功した。SDK がグローバルエンドポイントへ自動解決する。**作成に約10秒かかる**（他リソースは1秒） |
+| **CloudTrail のバケットポリシーは `s3:x-amz-acl` 条件を今も要求する** | [Amazon S3 bucket policy for CloudTrail](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/create-s3-bucket-policy-for-cloudtrail.html) を 2026-08-03 に直接確認。`aws:SourceArn`（trail の ARN）と併記する。**バケットポリシーと trail は相互参照になる**ため、trail ARN は文字列で組み立てて循環を切る |
+| **CloudTrail は配信まで通っている** | `get-trail-status` の `LatestDeliveryTime` に値が入り、証跡バケットに実際のオブジェクト（`AWSLogs/<account>/CloudTrail/ap-northeast-1/…json.gz` と `us-east-1/…`）が並んでいることを確認した。**`LatestDeliveryError: null` だけでは判定しない** — 配信を1度も試みていない段階でも null になるため。multi-region 設定が効いていることも、us-east-1 のオブジェクトが出ていることで確認できる |
+| **信頼ポリシーの `sub` 限定が効いている** | `iam get-role` で `StringLike: {"token.actions.githubusercontent.com:sub": "repo:OR-Sasaki/devops-agent-form:*"}` と `StringEquals: {"...:aud": "sts.amazonaws.com"}` を確認 |
+
+**`terraform plan` は S3 に書き込む（`use_lockfile = true` の場合）**
+
+[Phase 1](./02-implementation-plan.md#phase-1-ブートストラップ--最小-ci) の完了条件「state を読み書きできる」を `init` と `plan` だけで判定してよいかを確かめるため、`TF_LOG=TRACE` で実測した。
+
+```
+rpc.method=PutObject    aws.s3.key=main/terraform.tfstate.tflock   http.status_code=200
+rpc.method=GetObject    aws.s3.key=main/terraform.tfstate.tflock   http.status_code=200
+rpc.method=DeleteObject aws.s3.key=main/terraform.tfstate.tflock   http.status_code=204
+```
+
+→ **`plan` はロックオブジェクトを PutObject して DeleteObject する。** 書き込み権限が無ければ「Error acquiring the state lock」で落ちる。
+したがって **CI で `plan` が通れば読みだけでなく書きも通っている**と言ってよい。`apply` を待つ必要はない。
+
+**ローカルからの S3 バックエンド疎通** — `AWS_PROFILE=devopsagent-tf` で `terraform/main/` の `init` と `plan` が通った。[D-016](#d-016-デモアカウントへは-aws-login-で直接入る管理アカウントは経由しない) の `credential_process` 方式が Phase 1 の構成でも成立することを再確認した。
+
 ### GitHub
 
 ユーザー `OR-Sasaki`（org 無し、public repo 27）。`gh` の token scope に `repo` と `workflow` あり → リポジトリ作成も Actions も可能。
@@ -313,14 +346,14 @@ ALB の LCU、CloudWatch Logs、Container Insights、CloudTrail の保存料は�
 
 ## D-003: 専用の新規 AWS アカウントを発行する
 
-**決定** — 管理アカウント <ç®¡çã¢ã«ã¦ã³ã ID> から、本プロジェクト専用の[デモアカウント](../../CONTEXT.md#デモアカウント-demo-account)を新規発行する。既存アカウントには相乗りしない。
+**決定** — 管理アカウント <管理アカウント ID> から、本プロジェクト専用の[デモアカウント](../../CONTEXT.md#デモアカウント-demo-account)を新規発行する。既存アカウントには相乗りしない。
 
 **理由** — 新規アカウントは既存リソースがゼロなので、**Agent が拾うものすべてが本プロジェクトのもの**になる。タグによるスコープ制御も、IAM ポリシーでの絞り込みも不要になり、設計が単純化される。無料トライアル枠もアカウント単位のため新品で使える。
 
 **経緯** — 当初は「既存アカウント内に新 IAM ユーザーを作って分離する」案だったが、**IAM ユーザーを分けても観測スコープは分離されない**（Agent の可視範囲を決めるのは [Agent Space ロール](../../CONTEXT.md#agent-space-ロール-agent-space-role) のみ）という事実により方針変更。専用アカウント化でこの問題は根本から消滅した。
 
 **注意点**
-- アカウント発行にはユニークなメールアドレスが必要 → `<ç®¡çã¢ã«ã¦ã³ãã®ã¡ã¼ã«ã¢ãã¬ã¹>` 等の Gmail プラスエイリアスで足りる
+- アカウント発行にはユニークなメールアドレスが必要 → Gmail のプラスエイリアス（`<管理アカウントのアドレス>+devopsagent@…`）で足りる
 - 請求は管理アカウントに集約される → 予算アラームを Phase 0 で入れる
 - **SCP の継承を事前検証すること** — 配置先 OU の SCP が ECS / ELB / DynamoDB / `aidevops:*` を弾くと、原因の分かりにくい apply 失敗になる
 
@@ -407,7 +440,7 @@ ALB の LCU、CloudWatch Logs、Container Insights、CloudTrail の保存料は�
 - Terraform ではドメインを **任意変数**として扱う（`var.domain_name`、デフォルト `null`）
 - **未指定なら ALB の DNS 名でそのまま動く**こと。ドメイン未定が構築のブロッカーになってはならない
 - ドメインが決まった時点で、Route53 ホストゾーン＋ACM 証明書＋ALB の HTTPS リスナーを**後付けできる**形にしておく
-- 既存アカウント <æ¢å­ã¡ã³ãã¼ A> の `<æ¢å­ãã¡ã¤ã³>` は**使わない**（別アカウントであり、方針とも合わない）
+- 既存アカウント <既存メンバー A> が持つ既存ドメインは**使わない**（別アカウントであり、方針とも合わない）
 
 **この決定が成立する根拠** — Security Agent のペネトレーションテストは **HTTP_ROUTE 検証**で ALB の生 DNS 名のまま通る。したがってドメインが無くても観点3のデモは成立する。ドメインは「HTTPS を付けたくなったときの後付け要素」に過ぎない。
 
@@ -559,7 +592,10 @@ Security Agent のペネトレーションテストは検証済みドメイン�
 
 ## D-015: 予算上限は月 $100、通知は管理アカウントのメールへ
 
-**決定** — AWS Budgets を **月 $100** で設定し、**実績 50% / 80% / 100%** と**予測 100%** で `<ç®¡çã¢ã«ã¦ã³ãã®ã¡ã¼ã«ã¢ãã¬ã¹>` に通知する。
+**決定** — AWS Budgets を **月 $100** で設定し、**実績 50% / 80% / 100%** と**予測 100%** で管理アカウントのメールアドレスへ通知する。
+
+> **通知先アドレスはリポジトリに書かない。** Public リポジトリなのでクローラに拾われる。
+> `terraform/bootstrap/variables.tf` の `budget_notification_email` は default を持たず、実値は gitignore 済みの `terraform.tfvars` に置く（[D-022](#d-022-メールアドレスはリポジトリに置かない)）。
 
 **理由** — [D-002](#d-002-実行基盤は-ecs-fargate--alb--dynamodb) の実費見積りが月約 $55。上限を実費ちょうどに置くと通常運用で鳴り続けて無視する癖がつくため、約2倍を上限に取る。
 50% で「想定通り」、80% で「何かが余計に動いている」、100% で「止める判断」という3段階になる。
@@ -574,13 +610,13 @@ Security Agent のペネトレーションテストは検証済みドメイン�
 
 ## D-016: デモアカウントへは `aws login` で直接入る（管理アカウントは経由しない）
 
-**決定** — [デモアカウント](../../CONTEXT.md#デモアカウント-demo-account) **308513050613** へは `aws login --remote` で直接サインインする。**管理アカウント <ç®¡çã¢ã«ã¦ã³ã ID> の認証情報はローカルに一切置かない。**
+**決定** — [デモアカウント](../../CONTEXT.md#デモアカウント-demo-account) **308513050613** へは `aws login --remote` で直接サインインする。**管理アカウント <管理アカウント ID> の認証情報はローカルに一切置かない。**
 
 **経緯** — [D-004](#d-004-手作業はアカウント発行のみ以降すべて-terraform) は「管理アカウントの認証情報から `OrganizationAccountAccessRole` を assume して入る」と書いていたが、**その管理アカウントへ入る手段が計画に書かれておらず、実際にローカルにも無かった。**
 [Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) 着手時に判明した実状は次の通り。
 
-- `default`（<æ¢å­ã¡ã³ãã¼ A>）は**アクセスキーが失効済み**で使えない
-- `<å¥ã¢ã«ã¦ã³ãã®ãã­ãã¡ã¤ã«>`（<æ¢å­ã¡ã³ãã¼ B>）は有効だがメンバーアカウントであり、`CreateAccount` 等の管理アカウント専用 API には届かない
+- `default`（<既存メンバー A>）は**アクセスキーが失効済み**で使えない
+- `<別アカウントのプロファイル>`（<既存メンバー B>）は有効だがメンバーアカウントであり、`CreateAccount` 等の管理アカウント専用 API には届かない
 - したがって「既存アカウントから管理アカウントへ assume する」という逃げ道も塞がっていた
 
 **やり方**
@@ -626,7 +662,7 @@ Terraform 側は `devopsagent-tf` を使う。これで **S3 バックエンド�
 **却下**
 
 - **管理アカウントに IAM ユーザー＋アクセスキーを作る** — 最短だが、組織ルートの管理者相当の長期キーがローカルに残る。爆発半径が組織全体（既存2アカウント含む）に広がり、[D-004](#d-004-手作業はアカウント発行のみ以降すべて-terraform) に真っ向から反する
-- **管理アカウントに `<å¥ã¢ã«ã¦ã³ãã®ãã­ãã¡ã¤ã«>` から assume できるロールを作る** — 新規の長期キーは増えないが、本プロジェクトと無関係な既存アカウントの長期キーが組織全体への入口になる。[D-003](#d-003-専用の新規-aws-アカウントを発行する)「専用アカウントで爆発半径を閉じる」と逆行する
+- **管理アカウントに、別アカウントのプロファイルから assume できるロールを作る** — 新規の長期キーは増えないが、本プロジェクトと無関係な既存アカウントの長期キーが組織全体への入口になる。[D-003](#d-003-専用の新規-aws-アカウントを発行する)「専用アカウントで爆発半径を閉じる」と逆行する
 - **IAM Identity Center を有効化する** — 短期認証情報という点では同等で、権限セットを複数アカウントへ配れる利点もあるが、サンドボックス1つのために組織全体の認証基盤を導入するのは重い。`aws login` で同じ性質（長期キー無し・自動更新）が得られる
 
 ---
@@ -749,9 +785,159 @@ PR が返るなら望外の収穫であり、そのとき目標2 を戻せばよ
 
 ---
 
+## D-021: S3 バケット名にアカウント ID を含めない
+
+**決定** — [Phase 1](./02-implementation-plan.md#phase-1-ブートストラップ--最小-ci) で作る2つの S3 バケットを、アカウント ID を使わずに命名する。プレフィックスは `or-sasaki`。
+
+| 用途 | バケット名 |
+|---|---|
+| Terraform state | `or-sasaki-devops-agent-form-tfstate` |
+| CloudTrail 証跡 | `or-sasaki-devops-agent-form-cloudtrail` |
+
+**理由** — S3 バケット名をグローバル一意にする定石は「アカウント ID を混ぜる」だが、**state バケット名は `terraform/main/backend.tf` に平文で書かれ、Public リポジトリで公開される。**
+`backend` ブロックは変数を受け付けないため、直書きを避けられない。アカウント ID をバケット名に入れると [D-020](#d-020-oidc-ロールの-arn-はリポジトリ変数に逃がす) がロール ARN について回避したのと同じ露出が、別の経路で発生する。
+
+**引き受けたリスク** — 名前の衝突。S3 のバケット名前空間は全 AWS アカウントで共有されるため、他者が同名を先取していれば apply が `BucketAlreadyExists` で落ちる。
+`or-sasaki-devops-agent-form-*` は十分に特異なので実害は想定しないが、衝突したら `var.bucket_prefix` を変えて `backend.tf` も合わせて直す。**2026-08-03 の apply では衝突しなかった。**
+
+**却下**
+- **`random_id` でサフィックスを生成する** — 衝突は確実に避けられるが、名前が bootstrap の state（ローカル保持）にしか無くなる。`backend.tf` には結局その値を直書きするので**露出は減らず、再現性だけが落ちる**
+- **partial backend configuration にしてバケット名を CI から渡す** — `backend.tf` から名前が消えるので露出はゼロになる。だが `terraform init -backend-config=...` が要るようになり、ローカルからの plan（[Phase 2](./02-implementation-plan.md#phase-2-インフラ本体を書く) の完了条件）と CI で手順が分岐する。**バケット名はアカウント ID と違って他アカウントの情報を漏らさない**ので、そこまでの代償を払う価値が無い
+
+---
+
+## D-022: メールアドレスはリポジトリに置かない
+
+**決定** — [D-015](#d-015-予算上限は月-100通知は管理アカウントのメールへ) の予算通知先メールアドレスを、リポジトリ内のどのファイルにも平文で置かない。
+
+- `terraform/bootstrap/variables.tf` の `budget_notification_email` は **default を持たない**
+- 実値は **gitignore 済みの `terraform/bootstrap/terraform.tfvars`** に置く
+- 本ファイルおよび [02-implementation-plan.md](./02-implementation-plan.md) では「管理アカウントのメールアドレス」と記述する
+
+**理由** — [D-010](#d-010-github-リポジトリは-publicor-sasakidevops-agent-form) で Public にするため、平文のメールアドレスはクローラに収集されスパムの標的になる。
+[D-020](#d-020-oidc-ロールの-arn-はリポジトリ変数に逃がす)（公開しないで済むものを公開しない）と同じ判断を、別の値に適用したもの。
+
+**アカウント ID との扱いの違い** — アカウント ID（308513050613 等）は**伏せない**。
+Phase 0 の実測結果は「どのアカウントで何を測ったか」が対応しないと検証可能性を失い、決定ログとしての価値が落ちる。
+アカウント ID は単体で悪用できず、OIDC の `sub` を絞っている以上（[Phase 1](./02-implementation-plan.md#phase-1-ブートストラップ--最小-ci)）侵入経路にもならない。
+一方メールアドレスは**伏せても文書の検証可能性が一切損なわれない**。**代償の非対称性がこの線引きの根拠である。**
+
+**帰結** — `terraform/bootstrap/` を別環境で再現するには `terraform.tfvars` を手で作る必要がある。
+失っても plan が値を尋ねてくるだけで、**リソースは孤児化しない**（bootstrap の state 本体とは性質が違う）。
+
+**この方針は「現在のファイル」だけでは足りない（2026-08-03 の外部レビューで判明）**
+
+Public 化の直前に Codex にレビューさせたところ、**Git 履歴とコミットの author/committer にメールアドレスが残っている**ことが指摘された。実際に確認したところ:
+
+- 全コミットの author / committer が個人の Gmail アドレス
+- 過去の blob に、現在のファイルからは消した通知先アドレスが残っている
+
+→ **`git log --all -p` と `git log --format='%ae %ce'` を通さない限り「消した」と言ってはいけない。**
+Phase 1 では初回 push の前に履歴を書き換え、次の2つを実施した（[D-025](#d-025-初回-push-の前に-git-履歴を書き換える) を参照）。
+
+**伏せる対象は、メールアドレスだけではない。** 同じレビューで、デモアカウント以外の識別子が
+「再現に不要なのに公開されている」と指摘された。次のものを伏せ字に置き換えた。
+
+| 伏せたもの | 理由 |
+|---|---|
+| AWS Organizations の組織 ID | 本プロジェクトの再現に不要。組織構成を騙る詐称メールの材料になる |
+| 管理アカウント ID、既存メンバーアカウント ID | 同上。**本プロジェクトと無関係なアカウント**の情報 |
+| 既存アカウントの IAM ユーザー名・ローカルプロファイル名 | 同上 |
+| Security Agent の Application ID / Agent Space ID | 先頭のみ残して末尾を省略。同一性の識別には足り、値としては使えない |
+| Security Agent のウェブアプリ URL | 実在する到達可能なエンドポイントだった |
+| 別アカウントが持つ既存ドメイン名 | 本プロジェクトでは使わないと決めている（[D-007](#d-007-ドメインは決め打ちしない)） |
+
+**デモアカウント 308513050613 だけは伏せない。** 上の「アカウント ID との扱いの違い」で述べたとおり、
+Phase 0・Phase 1 の実測結果は**どのアカウントで測ったかが対応しないと検証可能性を失う**ためである。
+
+---
+
+## D-023: OIDC の信頼ポリシーは新旧2つの `sub` 形式を許可する
+
+**決定** — GitHub Actions 用ロールの信頼ポリシーで、`sub` の条件に**2つの形式を並べる**。
+
+```
+repo:OR-Sasaki/devops-agent-form:*                        # 旧形式
+repo:OR-Sasaki@<owner id>/devops-agent-form@<repo id>:*   # 不変形式
+```
+
+**理由（公式ドキュメントで確認した事実）** — **2026-07-15 以降に作成された GitHub リポジトリは、`sub` の既定が「不変形式」（immutable subject claims）になる。**
+[OIDC reference](https://docs.github.com/en/actions/reference/security/oidc) を 2026-08-03 に直接確認した。原文の構文は
+`"repo:OWNER@OWNER-ID/REPO@REPO-ID:ref:refs/heads/BRANCH"`、例は `"repo:octo-org@123456/octo-repo@456789:ref:refs/heads/main"`。
+オーナー名とリポジトリ名の**再取得によるなりすまし**を防ぐため、数値 ID が埋め込まれる。
+
+`OR-Sasaki/devops-agent-form` は **2026-08-03 に作成する**ので、この境界の後側に入る。
+旧形式だけを書いた信頼ポリシーでは **`sub` が一致せず `AssumeRoleWithWebIdentity` が拒否され、[Phase 1](./02-implementation-plan.md#phase-1-ブートストラップ--最小-ci) の完了条件そのものが達成できない。**
+
+> **失敗の向きは安全側である。** 一致しなければ拒否されるだけで、余計な権限は生まれない。
+> だが「なぜか assume できない」の原因として非常に特定しづらいので、先に潰す。
+
+**なぜ両方を書くのか** — どちらが発行されるかは**リポジトリの作成日と OIDC 設定**で決まり、後から組織・リポジトリ単位で切り替えられる。
+片方だけに賭けると、設定を変えた瞬間に CI が止まる。両方書いても**許可範囲は広がらない**（どちらもこのリポジトリだけを指す）。
+
+**⚠️ ID 部分にワイルドカードを使ってはいけない。** `repo:OR-Sasaki@*/devops-agent-form@*:*` と書くと、
+不変形式が防いでいる「ユーザー名の再取得によるなりすまし」を自分で無効化することになる。**数値 ID は実値で固定する。**
+
+**帰結** — リポジトリ ID はリポジトリを作るまで存在しない。手順が次の順序に固定される。
+
+1. GitHub リポジトリを作成する
+2. `gh api repos/<owner>/<repo> --jq .id` と `gh api users/<owner> --jq .id` で ID を取る
+3. `terraform/bootstrap/` に `github_repo_id` を渡して再 apply する
+4. その後にワークフローを回す
+
+`var.github_repo_id` は default `null` で、**null の間は不変形式を信頼ポリシーに含めない**。初回 apply をリポジトリ作成前に実行できるようにするため。
+
+---
+
+## D-024: サードパーティ action は完全長のコミット SHA で固定する
+
+**決定** — `.github/workflows/` で使う GitHub 以外が配布する action を、**タグではなく完全長のコミット SHA** で参照する。横にバージョンタグをコメントで残す。
+
+```yaml
+uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+```
+
+**理由** — このワークフローが assume するロールは **`AdministratorAccess` を持つ**（[D-009](#d-009-アプリも-terraform-も-ci-から-apply-する完全-gitops)）。
+`@v6` のようなタグ参照は**可変**で、タグの付け替えや配布元リポジトリの侵害があれば、
+action が OIDC トークンないし取得後の一時認証情報を外部へ送れる。**デモアカウントを丸ごと奪われる経路になる。**
+GitHub 公式も、サードパーティ action を不変のリリースとして使う唯一の方法は完全長 SHA への固定だと述べている。
+
+**引き受けた代償** — 更新が自動で流れてこない。タグから SHA を引き直す手作業が要る。
+1週間の検証期間（[D-011](#d-011-撤収はキャンペーン型検証期間中は起動しっぱなし期間後に-destroy)）では更新自体がほぼ発生しないため、代償は小さい。
+
+**却下** — **`actions/*` は GitHub 公式なのでタグのままにする。** 区別を作ると「どれが公式か」を毎回判断することになり、判断の隙間から漏れる。全部 SHA で揃えるほうが単純。
+
+---
+
+## D-025: 初回 push の前に Git 履歴を書き換える
+
+**決定** — GitHub へ最初に push する前に、それまでのローカル履歴を書き換え、
+**コミットの author / committer を GitHub の noreply アドレスに置換し、過去 blob からメールアドレスを除去する。**
+
+**理由** — [D-022](#d-022-メールアドレスはリポジトリに置かない) で現在のファイルからメールアドレスを消しても、
+**`git log` と過去の blob からは読める。** Public リポジトリでは履歴も全公開されるため、消したことにならない。
+
+2026-08-03 の外部レビュー（Codex）でこれを指摘され、実際に確認したところ**2種類のアドレス**が残っていた。
+
+- 全コミットの author / committer に設定されていた個人の Gmail アドレス
+- [D-015](#d-015-予算上限は月-100通知は管理アカウントのメールへ) の通知先アドレス（過去 blob）
+
+**やり方** — リモートがまだ存在しない段階なので、`git filter-branch` 相当の書き換えを**代償なしで**実行できる。
+push した後では、共有された履歴を壊すことになり同じ手が使えない。**「初回 push の前」であることが条件である。**
+
+`git config user.email` も noreply アドレスに変更する。しないと次のコミットで元に戻る。
+
+**帰結** — このリポジトリの `main` は、以前のローカルコミットとは**別のハッシュ**になる。
+書き換え前の履歴はローカルの `refs/backup/pre-publish` に残してあるが、**これは push しない**（push すると元のメールアドレスが公開される）。
+
+**この決定は一般化できる** — 「Public 化の完了条件」に、現在のツリーだけでなく
+**コミットメタデータと全履歴 blob を対象にした走査**を含めること。現在のファイルを見るだけでは不十分である。
+
+---
+
 ## 未決事項
 
-**判断事項は無い。** D-001〜D-020 で解消済み。新しい判断が生じたら D-021 以降として追記する。
+**判断事項は無い。** D-001〜D-025 で解消済み。新しい判断が生じたら D-026 以降として追記する。
 
 ### 未確認のまま残っている事実
 

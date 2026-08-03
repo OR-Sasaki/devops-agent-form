@@ -9,6 +9,26 @@ resource "aws_iam_openid_connect_provider" "github" {
   # GitHub の OIDC プロバイダでは使われず、aws プロバイダ 6.57.1 でも必須ではない（実測）。
 }
 
+locals {
+  github_owner = split("/", var.github_repository)[0]
+  github_repo  = split("/", var.github_repository)[1]
+
+  # GitHub の OIDC トークンの sub には2つの形式がある（D-023）。
+  #
+  # 旧形式   repo:OWNER/REPO:...                        2026-07-15 より前に作られたリポジトリ
+  # 不変形式 repo:OWNER@OWNER-ID/REPO@REPO-ID:...       2026-07-15 以降に作られたリポジトリの既定
+  #
+  # どちらが発行されるかはリポジトリの作成日と OIDC 設定で決まるため、両方を許可する。
+  # ⚠️ ID 部分にワイルドカードを使ってはいけない。不変形式が防いでいる
+  #    「ユーザー名の再取得によるなりすまし」をそのまま無効化してしまう。
+  github_subs = concat(
+    ["repo:${var.github_repository}:*"],
+    var.github_repo_id == null ? [] : [
+      "repo:${local.github_owner}@${var.github_owner_id}/${local.github_repo}@${var.github_repo_id}:*"
+    ],
+  )
+}
+
 data "aws_iam_policy_document" "github_actions_trust" {
   statement {
     effect  = "Allow"
@@ -31,7 +51,7 @@ data "aws_iam_policy_document" "github_actions_trust" {
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repository}:*"]
+      values   = local.github_subs
     }
   }
 }

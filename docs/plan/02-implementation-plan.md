@@ -109,7 +109,7 @@ devops-agent-form/
 
 **1. アカウント発行（ユーザーの手作業）— 完了**
 
-管理アカウント **<ç®¡çã¢ã«ã¦ã³ã ID>** から発行済み。アカウント ID は **308513050613**。
+管理アカウント **<管理アカウント ID>** から発行済み。アカウント ID は **308513050613**。
 
 **2. デモアカウントに Terraform から入れること**
 
@@ -200,6 +200,35 @@ TYPE が `shared-credentials-file` だと静的キーに負けている（[D-016
 
 ## Phase 1: ブートストラップ ＋ 最小 CI
 
+**進捗（2026-08-03 時点）**
+
+| # | 項目 | 状態 |
+|---|---|---|
+| 1 | `terraform/bootstrap/` を書いてローカル apply | ✅ **完了** — 14 リソース。実測結果は [00-decisions.md](./00-decisions.md#phase-1-の実機確認結果2026-08-03) |
+| 2 | `README.md`（冒頭に警告） | ✅ **完了** — 日英併記。公開前に配置した |
+| 3 | 公開前の外部レビューと是正 | ✅ **完了** — Codex に2回レビューさせ、[D-023](./00-decisions.md#d-023-oidc-の信頼ポリシーは新旧2つの-sub-形式を許可する)〜[D-025](./00-decisions.md#d-025-初回-push-の前に-git-履歴を書き換える) を追加 |
+| 4 | GitHub リポジトリ作成と push | 🚧 実施中 |
+| 5 | リポジトリ ID を取って信頼ポリシーを再 apply | 🚧 実施中（[D-023](./00-decisions.md#d-023-oidc-の信頼ポリシーは新旧2つの-sub-形式を許可する)） |
+| 6 | `gh variable set AWS_ROLE_ARN` | 🚧 実施中 |
+| 7 | `deploy.yml` で OIDC 疎通確認 | 🚧 実施中 |
+
+**実行順序が [D-023](./00-decisions.md#d-023-oidc-の信頼ポリシーは新旧2つの-sub-形式を許可する) で変わった。** 当初の計画は「bootstrap を apply してからリポジトリを作る」だったが、
+2026-07-15 以降に作られたリポジトリの OIDC `sub` には**リポジトリの数値 ID が入る**ため、
+**リポジトリを作らないと信頼ポリシーを完成させられない。** bootstrap の初回 apply 自体はリポジトリ作成前に通る（`var.github_repo_id` の default が `null` のため）が、
+**ワークフローを回す前に ID を渡して再 apply する必要がある。**
+
+Phase 1 の実施中に追加した決定は5つ。
+
+| 決定 | 内容 |
+|---|---|
+| [D-021](./00-decisions.md#d-021-s3-バケット名にアカウント-id-を含めない) | S3 バケット名にアカウント ID を含めない（`backend.tf` は公開されるため） |
+| [D-022](./00-decisions.md#d-022-メールアドレスはリポジトリに置かない) | メールアドレスをリポジトリに置かない。他アカウントの識別子も伏せる |
+| [D-023](./00-decisions.md#d-023-oidc-の信頼ポリシーは新旧2つの-sub-形式を許可する) | OIDC の信頼ポリシーで新旧2つの `sub` 形式を許可する |
+| [D-024](./00-decisions.md#d-024-サードパーティ-action-は完全長のコミット-sha-で固定する) | サードパーティ action を完全長コミット SHA で固定する |
+| [D-025](./00-decisions.md#d-025-初回-push-の前に-git-履歴を書き換える) | 初回 push の前に Git 履歴を書き換える |
+
+---
+
 `terraform/bootstrap/` を**ローカルから1回だけ** apply する。state はローカル保持（この層は CI から触らない）。
 
 > **使うプロファイル** — `bootstrap/` は state がローカルなので **`devopsagent`** でよい（S3 バックエンドを使わないため）。
@@ -229,8 +258,14 @@ TYPE が `shared-credentials-file` だと静的キーに負けている（[D-016
   **リポジトリを公開する前に置くこと。** 公開してから足すのでは順序が逆になる
 
 **注意** — OIDC ロールの信頼ポリシーで `sub` を絞ること。絞らないと**任意のリポジトリからこのアカウントに入れる**。Public リポジトリなので特に重要。
+→ **実装済み。** `StringLike` で `repo:OR-Sasaki/devops-agent-form:*`、`StringEquals` で `aud = sts.amazonaws.com`（[実測で確認](./00-decisions.md#phase-1-の実機確認結果2026-08-03)）。
 
 **完了条件** — CI が OIDC でこのアカウントに入り、S3 の state を読み書きできること（`terraform/main/` は空のままでよい）。
+
+> **`init` と `plan` だけで「書き」まで判定できる。** `use_lockfile = true` なので、`plan` は
+> `main/terraform.tfstate.tflock` を **PutObject して DeleteObject する**（`TF_LOG=TRACE` で実測。
+> [00-decisions.md](./00-decisions.md#phase-1-の実機確認結果2026-08-03) にログを引用）。
+> 書き込み権限が無ければ「Error acquiring the state lock」で落ちるため、**`apply` を待つ必要はない。**
 
 ---
 
