@@ -15,18 +15,23 @@ locals {
 
   # GitHub の OIDC トークンの sub には2つの形式がある（D-023）。
   #
-  # 旧形式   repo:OWNER/REPO:...                        2026-07-15 より前に作られたリポジトリ
-  # 不変形式 repo:OWNER@OWNER-ID/REPO@REPO-ID:...       2026-07-15 以降に作られたリポジトリの既定
+  # 旧形式   repo:OWNER/REPO:...                    2026-07-15 より前に作られたリポジトリ
+  # 不変形式 repo:OWNER@OWNER-ID/REPO@REPO-ID:...   2026-07-15 以降に作られたリポジトリの既定
   #
-  # どちらが発行されるかはリポジトリの作成日と OIDC 設定で決まるため、両方を許可する。
-  # ⚠️ ID 部分にワイルドカードを使ってはいけない。不変形式が防いでいる
-  #    「ユーザー名の再取得によるなりすまし」をそのまま無効化してしまう。
-  github_subs = concat(
-    ["repo:${var.github_repository}:*"],
-    var.github_repo_id == null ? [] : [
-      "repo:${local.github_owner}@${var.github_owner_id}/${local.github_repo}@${var.github_repo_id}:*"
-    ],
-  )
+  # ⚠️ 両方を並べてはいけない。旧形式は「オーナー名を誰かが再取得すると
+  #    同じ sub を作れてしまう」問題を抱えており、不変形式はそれを塞ぐために存在する。
+  #    このロールは AdministratorAccess を持つので、旧形式を残すと
+  #    OR-Sasaki が改名・削除されたときにアカウントを丸ごと奪われる経路が復活する。
+  #
+  # ⚠️ ID 部分にワイルドカードを使ってはいけない。理由は上と同じ。
+  #
+  # github_repo_id が null なのは「リポジトリをまだ作っていない」状態だけ。
+  # そのときは旧形式で置いておき、リポジトリ作成後に ID を渡して不変形式へ切り替える。
+  github_subs = var.github_repo_id == null ? [
+    "repo:${var.github_repository}:*"
+    ] : [
+    "repo:${local.github_owner}@${var.github_owner_id}/${local.github_repo}@${var.github_repo_id}:*"
+  ]
 }
 
 data "aws_iam_policy_document" "github_actions_trust" {
