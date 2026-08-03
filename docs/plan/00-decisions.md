@@ -2,7 +2,7 @@
 
 グリルセッションで確定した決定を、決まった順に記録する。用語は [CONTEXT.md](../../CONTEXT.md) に従う。
 
-**ステータス: 決定確定（D-001〜D-025）／未決事項なし／Phase 0 完了（項目6 は Phase 5 へ移送）／Phase 1 実施中／検証期間は 2026-08-10 頃まで**
+**ステータス: 決定確定（D-001〜D-025）／未決事項なし／Phase 0・Phase 1 完了／検証期間は 2026-08-10 頃まで**
 2026-08-02 のグリルセッションで全項目を解消。同日の外部レビューを受けて D-014・D-015 を追加し、[D-002](#d-002-実行基盤は-ecs-fargate--alb--dynamodb) のコスト見積りと [D-008](#d-008-リージョンは-ap-northeast-1-に統一) のリスク認識を訂正した。
 同日の [Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) の実機確認で D-016・D-017 を追加し、[D-008](#d-008-リージョンは-ap-northeast-1-に統一) の「3目標すべて東京で成立する」という記述を**再度訂正した**（[D-017](#d-017-目標2-の到達点を-agent-ready-specification-に縮小する) を参照）。
 [Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) 完了時に D-018・D-019 を、Phase 1 の着手準備で D-020 を追加した。
@@ -294,6 +294,37 @@ rpc.method=DeleteObject aws.s3.key=main/terraform.tfstate.tflock   http.status_c
 したがって **CI で `plan` が通れば読みだけでなく書きも通っている**と言ってよい。`apply` を待つ必要はない。
 
 **ローカルからの S3 バックエンド疎通** — `AWS_PROFILE=devopsagent-tf` で `terraform/main/` の `init` と `plan` が通った。[D-016](#d-016-デモアカウントへは-aws-login-で直接入る管理アカウントは経由しない) の `credential_process` 方式が Phase 1 の構成でも成立することを再確認した。
+
+**GitHub リポジトリと CI（2026-08-03）**
+
+| 項目 | 実測値 |
+|---|---|
+| リポジトリ | `OR-Sasaki/devops-agent-form`（Public） |
+| リポジトリ ID / オーナー ID | `1321456466` / `15667196`（`gh api` で取得。どちらも公開 API から誰でも読める） |
+| ランナー | `ubuntu-latest`。**AWS CLI 2.36.2 がプリインストール済み**（[runner-images](https://github.com/actions/runner-images) の Ubuntu2404-Readme を確認）なので、疎通確認に別途インストールが要らない |
+| action の版 | `actions/checkout` v7.0.1 / `aws-actions/configure-aws-credentials` v6.2.3 / `hashicorp/setup-terraform` v4.0.1。いずれも完全長 SHA で固定（[D-024](#d-024-サードパーティ-action-は完全長のコミット-sha-で固定する)） |
+
+**OIDC の `sub` は不変形式が発行されている（実測で確定）**
+
+信頼ポリシーを**不変形式1件だけ**に絞った状態（[D-023](#d-023-oidc-の信頼ポリシーは不変形式の-sub-に切り替える)）で、初回のワークフロー実行が成功した。
+**旧形式を一切許可していないので、成功したこと自体が「不変形式が発行されている」ことの証拠になる。**
+2026-07-15 以降に作成されたリポジトリに関する公式ドキュメントの記述が、このリポジトリで実際に成立していることを確認できた。
+
+```
+Assuming role with OIDC
+Authenticated as assumedRoleId AROAUPVGPR723GUOXFF77:gha-30797407173
+OIDC assume: OK
+Terraform has been successfully initialized!
+No changes. Your infrastructure matches the configuration.
+```
+
+**「state を書ける」の根拠は2段構えである（推論の部分を明示する）**
+
+1. **実測** — `use_lockfile = true` の `plan` が `.tflock` を PutObject / GetObject / DeleteObject することを、ローカルで `TF_LOG=TRACE` により確認した（上記）
+2. **推論** — CI の `plan` が成功した以上、CI のロールでもその3操作が通っている。書き込み権限が無ければ「Error acquiring the state lock」で停止するため
+
+**CI から S3 への PutObject 自体を直接観測してはいない。** CloudTrail は管理イベントのみで、S3 のデータイベントは有効にしていないため（有効にすると課金対象になる）。
+`terraform/main/` に実リソースが入る [Phase 4](./02-implementation-plan.md#phase-4-cicd-の拡充) の初回 apply で、state ファイルそのものが S3 に書かれることを直接確認できる。
 
 ### GitHub
 

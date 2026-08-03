@@ -200,17 +200,17 @@ TYPE が `shared-credentials-file` だと静的キーに負けている（[D-016
 
 ## Phase 1: ブートストラップ ＋ 最小 CI
 
-**進捗（2026-08-03 時点）**
+**進捗（2026-08-03）— ✅ 完了**
 
 | # | 項目 | 状態 |
 |---|---|---|
 | 1 | `terraform/bootstrap/` を書いてローカル apply | ✅ **完了** — 14 リソース。実測結果は [00-decisions.md](./00-decisions.md#phase-1-の実機確認結果2026-08-03) |
-| 2 | `README.md`（冒頭に警告） | ✅ **完了** — 日英併記。公開前に配置した |
+| 2 | `README.md`（冒頭に警告） | ✅ **完了** — 日英併記。**公開前に**配置した |
 | 3 | 公開前の外部レビューと是正 | ✅ **完了** — Codex に2回レビューさせ、[D-023](./00-decisions.md#d-023-oidc-の信頼ポリシーは不変形式の-sub-に切り替える)〜[D-025](./00-decisions.md#d-025-初回-push-の前に-git-履歴を書き換える) を追加 |
-| 4 | GitHub リポジトリ作成と push | 🚧 実施中 |
-| 5 | リポジトリ ID を取って信頼ポリシーを再 apply | 🚧 実施中（[D-023](./00-decisions.md#d-023-oidc-の信頼ポリシーは不変形式の-sub-に切り替える)） |
-| 6 | `gh variable set AWS_ROLE_ARN` | 🚧 実施中 |
-| 7 | `deploy.yml` で OIDC 疎通確認 | 🚧 実施中 |
+| 4 | GitHub リポジトリ作成と push | ✅ **完了** — [OR-Sasaki/devops-agent-form](https://github.com/OR-Sasaki/devops-agent-form)（Public） |
+| 5 | リポジトリ ID を取って信頼ポリシーを再 apply | ✅ **完了** — `sub` が不変形式1件になった（[D-023](./00-decisions.md#d-023-oidc-の信頼ポリシーは不変形式の-sub-に切り替える)） |
+| 6 | `gh variable set AWS_ROLE_ARN` | ✅ **完了** |
+| 7 | `deploy.yml` で OIDC 疎通確認 | ✅ **完了** — 初回実行で成功 |
 
 **実行順序が [D-023](./00-decisions.md#d-023-oidc-の信頼ポリシーは不変形式の-sub-に切り替える) で変わった。** 当初の計画は「bootstrap を apply してからリポジトリを作る」だったが、
 2026-07-15 以降に作られたリポジトリの OIDC `sub` には**リポジトリの数値 ID が入る**ため、
@@ -266,6 +266,14 @@ Phase 1 の実施中に追加した決定は5つ。
 > `main/terraform.tfstate.tflock` を **PutObject して DeleteObject する**（`TF_LOG=TRACE` で実測。
 > [00-decisions.md](./00-decisions.md#phase-1-の実機確認結果2026-08-03) にログを引用）。
 > 書き込み権限が無ければ「Error acquiring the state lock」で落ちるため、**`apply` を待つ必要はない。**
+
+**達成（2026-08-03）** — [run 30797407173](https://github.com/OR-Sasaki/devops-agent-form/actions/runs/30797407173) が初回実行で成功。
+ログに `Assuming role with OIDC` → `Authenticated as assumedRoleId …:gha-30797407173` → `OIDC assume: OK` →
+`Terraform has been successfully initialized!` → `No changes.` が並んでいる。
+
+> **副産物として、OIDC の `sub` が不変形式であることも実測で確定した。**
+> 信頼ポリシーが不変形式1件しか許可していない状態で assume が通ったため、
+> **成功したこと自体が「不変形式が発行されている」ことの証拠になる**（[D-023](./00-decisions.md#d-023-oidc-の信頼ポリシーは不変形式の-sub-に切り替える)）。
 
 ---
 
