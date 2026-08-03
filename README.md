@@ -32,6 +32,15 @@ AWS の2つのフロンティアエージェントに「実際に壊れたシス
 **「壊れたときにエージェントが辿れる痕跡を残す器」**として存在しています。
 この区別は [CONTEXT.md](./CONTEXT.md) に用語として定義してあります。
 
+## 現在の状態
+
+**構築の途中です。** `terraform/bootstrap/`（state バケット・OIDC・ECR・CloudTrail・予算）だけが作られており、
+`terraform/main/`（ネットワーク・ALB・ECS・DynamoDB）と `app/` はまだ空です。
+どこまで進んだかは [docs/plan/02-implementation-plan.md](./docs/plan/02-implementation-plan.md) の各 Phase の進捗表を見てください。
+
+**この時点でのコードに、意図的な脆弱性はまだ入っていません。** 冒頭の警告は、
+このリポジトリが**これから脆弱性を入れる場所である**ことに対するものです。
+
 ## 構成
 
 ```

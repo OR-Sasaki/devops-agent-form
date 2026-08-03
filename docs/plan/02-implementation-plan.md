@@ -504,6 +504,13 @@ ALB の LCU・CloudWatch Logs・Container Insights・CloudTrail 保存は上記�
 
 1. `terraform/main/` を destroy（ALB / ECS / DynamoDB / Agent Space が消える）
 2. 必要なら `terraform/bootstrap/` も destroy（state バケット・ECR・CloudTrail）
+
+   > **state バケットだけは `terraform destroy` で消えない。** バージョニングが有効でオブジェクトが残るため、
+   > `BucketNotEmpty` で失敗する。**これは意図した保護であって不具合ではない** — state バケットに
+   > `force_destroy = true` を付けると、うっかりした destroy 1回で state の履歴ごと消える。
+   > 本当に消すときは中身を空にしてから destroy する（`aws s3 rm s3://<bucket> --recursive` に加え、
+   > **バージョンと削除マーカーの削除が要る**）。
+   > ECR（`force_delete = true`）と CloudTrail 証跡バケット（`force_destroy = true`）はそのまま消える。
 3. 他アカウントで Security Agent を使う予定があるなら、**GitHub App をアンインストール**する
 4. デモアカウント自体を閉鎖する場合は管理アカウントから
 
