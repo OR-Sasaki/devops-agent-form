@@ -389,6 +389,76 @@ awscc は [Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と
 > という2つの理由から、**$0 が返ること自体は正常な構成でも起こる。**
 > 判定にはインフラが実際に稼働した後の日次実績が要る。**[Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) の項目11 が本来の確認点である。**
 
+### Phase 3・4 の実機確認結果（2026-08-03）
+
+**`terraform/main/` の初回 apply が成功した。** [run 30810215552](https://github.com/OR-Sasaki/devops-agent-form/actions/runs/30810215552)。すべて実測であり、推測は含まない。
+
+**所要時間** — ジョブ全体で **6分15秒**。
+
+| ステップ | 所要 |
+|---|---|
+| `docker build` ＋ `docker push`（初回・キャッシュ無し） | 33 秒 |
+| `terraform apply`（**48 リソース**を新規作成） | **3分36秒** |
+| `aws ecs wait services-stable` | 1分24秒 |
+
+計画は「ALB の作成だけで3〜5分」を見込んでいたが、**apply 全体が 3分36秒で終わった。** `time_sleep` 30 秒と Agent Space 2つを含んだうえでこの値である。
+ジョブのタイムアウトを 45 分に取ったのは過剰だったが、**壊れたときに諦めるまでの時間**（`services-stable` の約10分）を含むので、この余裕は残す。
+
+**awscc の3リソースは初回 apply で問題なく作られた** — 最も検証が薄いと見ていた部分だが、`plan` から `apply` まで追加の修正は不要だった。
+
+| リソース | 実測 |
+|---|---|
+| `awscc_devopsagent_agent_space` | ✅ 作成（`devops-agent-form`） |
+| `awscc_devopsagent_association`（`service_id = "aws"`） | ✅ 作成 |
+| `awscc_securityagent_agent_space` | ✅ 作成（`devops-agent-form`）。[D-019](#d-019-先行作成した-agent-space-は削除しterraform-に作り直させる) の通り名前の衝突は起きなかった |
+
+**ECS タスクは2台とも起動した（[Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) 項目1 に相当）**
+
+- `runningCount = 2` / `rolloutState = COMPLETED`
+- 2台が **`ap-northeast-1a` と `ap-northeast-1c` に分かれた**（[D-013](#d-013-委任された技術判断こちらで決定) の AZ 冗長が実際に効いている）
+- `ecs.cpu-architecture` は**両方 `x86_64`**。`runtime_platform` の指定と CI のビルドが一致している
+- ALB のターゲットは**2つとも `healthy`**
+- **`assign_public_ip = true` は効いている。** ECR の pull と CloudWatch Logs への到達がどちらも成功しており、NAT 無し構成が成立することを実測で確認した
+
+> **CI が push したイメージは単一プラットフォームの Docker v2 マニフェストだった**（`application/vnd.docker.distribution.manifest.v2+json`）。
+> ローカルの Docker Desktop で焼くと attestation 付きの OCI インデックスになるが、`ubuntu-latest` の classic builder は素の単一マニフェストを吐く。**ECS はそのまま pull できた。**
+
+**アプリの疎通（[Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) 項目2・7 に相当）**
+
+- `GET /healthz` が `{"status":"ok","commitSha":"eedb72c…"}` を返す
+- `POST /submit` → **DynamoDB に項目が入る。** `commitSha` 属性にデプロイの SHA が入っていることも確認した
+- `GET /admin` は**認証情報なしで 401、正しい認証情報で 200**（[D-035](#d-035-ベースラインには観点3-の故障を1つも置かない)）。SSM Parameter Store からの `ADMIN_PASSWORD` 注入が機能している
+- **XSS の余地は塞がっている。** `<script>alert(1)</script>` を含む本文を送信し、`/admin` の HTML に `&lt;script&gt;` としてのみ現れ、**生の `<script>` が 0 件**であることを確認した
+
+**構造化ログは CloudWatch 側で JSON として解析されている（[Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) 項目7 の前提）**
+
+```
+aws logs filter-log-events --log-group-name /ecs/devops-agent-form \
+  --filter-pattern '{ $.commitSha = "eedb72c0d99cc1f8086af2b29703073a226698ee" }'
+```
+
+**このメトリクスフィルタ構文（`$.commitSha`）で実際にヒットした。** つまりログは文字列としてではなく
+**JSON として解析されており、`commitSha` をフィールドとして絞り込める。**
+「アラーム → ログ（SHA）→ タスク定義（イメージタグ）→ コミット」の相関経路が成立する条件が揃った。
+
+ログには `requestId` に加えて **ALB が付ける `X-Amzn-Trace-Id`（`traceId`）** と、`X-Forwarded-For` の**末尾**から取った接続元 IP が乗る。
+
+**⚠️ `UnHealthyHostCount` アラームは、作成直後に ALARM へ落ちた** — [D-028](#d-028-異常ホストアラームは-minimum-統計で見る) が代償として引き受けた挙動が**実際に起きた。**
+
+```
+devops-agent-form-alb-unhealthy-hosts   ALARM
+  Threshold Crossed: no datapoints were received for 2 periods
+  and 2 missing datapoints were treated as [Breaching].
+```
+
+**このときターゲットは2つとも `healthy` である。** 障害ではなく、**トラフィックがゼロでメトリクスが報告されていない**ことによる。
+[D-028](#d-028-異常ホストアラームは-minimum-統計で見る) は「静かなときに鳴る」を文書からの**予測**として書いていたが、**予測ではなく実際の挙動だと確定した。**
+残る6つのアラームは `notBreaching` なのですべて `OK`。
+
+> **デモ時の読み方に影響する。** このアラームが ALARM でも、それ単体では異常を意味しない。
+> [Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) の項目4 で閾値を見直すか、`treat_missing_data` を選び直すかを判断する。
+> **「全滅を無音にしない」ことと引き換えなので、単純に `notBreaching` へ戻すのは [D-028](#d-028-異常ホストアラームは-minimum-統計で見る) の判断を覆すことになる。**
+
 ### GitHub
 
 ユーザー `OR-Sasaki`（org 無し、public repo 27）。`gh` の token scope に `repo` と `workflow` あり → リポジトリ作成も Actions も可能。
@@ -1378,14 +1448,20 @@ fork のコードをベースリポジトリの権限で走らせるイベント
 - **Security Agent の無料トライアル残枠**（[Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) 項目6）— CLI からは取得できなかった。コンソールで確認する。**ペンテスト実行前に必ず**（[D-015](#d-015-予算上限は月-100通知は管理アカウントのメールへ)）
   → **トライアルの「期間」は制約にならない**（[D-011](#d-011-撤収はキャンペーン型検証期間中は起動しっぱなし期間後に-destroy) で1週間以内に全削除する方針が決まったため、2ヶ月枠の内側に収まる）。
   **確認が要るのは「残枠」のほう。** 使い切っていればペンテスト1回 $50/task-hour が実費になり、[D-015](#d-015-予算上限は月-100通知は管理アカウントのメールへ) の上限 $100 の半分を消費しうる
-- **`devops-agent get-account-usage` が `AccessDenied` になる理由** — 同じ `aidevops` 名前空間の他 API は通るので名前空間ごとの deny ではない。仮説は①オンボード前は使えない ②使用量は請求データなので管理アカウント側にしか出ない ③ルートユーザー固有の制限。
-  **2026-08-03 に Security Agent を有効化した後も `AccessDenied` のままだった**が、これは①を否定しない — **`get-account-usage` は `devops-agent` の API であり、DevOps Agent 側の Agent Space はまだ存在しない**ため。[Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) で DevOps Agent の Agent Space を作った後に再試行すれば①を切り分けられる
-- **コストデータに実際の課金が乗ってくるか** — [Phase 2](./02-implementation-plan.md#phase-2-インフラ本体を書く) で再実行したが**まだ判定できない**。`ce:GetCostAndUsage` は正常に応答するものの金額は `0` のままで、これは①反映遅延 ②Phase 1 のリソースの請求額がそもそもほぼゼロ、で説明がつく。
-  → **インフラが実際に稼働した後でなければ測れない。[Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) の項目11 で確認する**
+- ~~**`devops-agent get-account-usage` が `AccessDenied` になる理由**~~ → **✅ 解決（2026-08-03）。仮説①「オンボード前は使えない」が正しかった。**
+  [Phase 4](./02-implementation-plan.md#phase-4-cicd-の拡充) の初回 apply で DevOps Agent の Agent Space が実体化した直後に再試行したところ、**`ap-northeast-1` では正常に応答するようになった**（`monthlyAccountInvestigationHours` 等の4項目、いずれも `limit: -1` / `usage: 0.0`）。
+  **一方 `us-east-1` は `AccessDeniedException` のままである。** そちらには Agent Space を作っていない。
+  → **この API は「そのリージョンに Agent Space が存在すること」を要求する。** 権限や請求データの所在（仮説②）でもルート固有の制限（仮説③）でもなかった。
+  なお `limit: -1` は無料トライアルの残枠を示す値ではないため、**[Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) の Security Agent の残枠確認は依然としてコンソールで行う必要がある**（そもそも別サービスの API である）
+- **コストデータに実際の課金が乗ってくるか** — [Phase 2](./02-implementation-plan.md#phase-2-インフラ本体を書く) で再実行したが**まだ判定できなかった**。`ce:GetCostAndUsage` は正常に応答するものの金額は `0` のままで、これは①反映遅延 ②Phase 1 のリソースの請求額がそもそもほぼゼロ、で説明がついた。
+  → **2026-08-03 11:42 (UTC) にインフラが稼働を始めた**（[Phase 3・4 の実機確認結果](#phase-34-の実機確認結果2026-08-03)）。ALB・Fargate ×2・Public IPv4 ×4 が動き出したので、**2026-08-04 中に `ce:GetCostAndUsage` を叩けば決着する。**
+  それまでは反映遅延と区別がつかないため、**この時点で $0 が返ることを「見えない」と読んではいけない。** 判定は [Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) の項目11 で行う
 - **DevOps Agent の GitHub 連携を Terraform でどこまで書けるか**（[awscc プロバイダのスキーマ検証](#awscc-プロバイダのスキーマ検証phase-0-項目5) を参照）。[Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) で確認する。
   → **[Phase 2](./02-implementation-plan.md#phase-2-インフラ本体を書く) で書く口だけは用意した**（[D-029](#d-029-エージェントの-github-連携は既定で無効にする)、既定は無効）。
   **`awscc_devopsagent_association` に渡す GitHub 用の `service_id` の実値は依然として不明で、コード中の `"github"` は確認した値ではない**
-- **`UnHealthyHostCount` のアラームが、トラフィックの無い時間帯に ALARM へ落ちるか** — [D-028](#d-028-異常ホストアラームは-minimum-統計で見る) で `breaching` の代償として引き受けたが、**実際の振れ方は文書からの予測であって実測ではない。** [Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) で観測する
+- ~~**`UnHealthyHostCount` のアラームが、トラフィックの無い時間帯に ALARM へ落ちるか**~~ → **✅ 落ちる（2026-08-03 に実測）。**
+  初回 apply の直後、**ターゲットが2つとも `healthy` であるにもかかわらず ALARM になった**（`no datapoints were received for 2 periods and 2 missing datapoints were treated as [Breaching]`）。
+  [D-028](#d-028-異常ホストアラームは-minimum-統計で見る) が予測として書いていた代償が、そのまま実際の挙動だった。**残るのは「どう扱うか」の判断で、[Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) の項目4 で決める**
 - **サービスの `MemoryUtilization` の分母が、タスク単位の 512 MiB とコンテナ単位の hard limit のどちらか** — [D-034](#d-034-観点-1-2-と-1-6-の想定症状を訂正する) の通り**公式ドキュメントからは決まらない。** 観点1-4 でメモリアラームが鳴るかがこれで変わる（設計自体はどちらでも成立する）。[Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) で実測する
 - **観点1-5 で確実にスロットリングを起こす負荷条件** — 低容量プロビジョンド（1 WCU）に落とした後、どれだけの送信で `WriteThrottleEvents` が立つかは決めていない。故障を実際に仕込むときに詰める（[D-005](#d-005-故障は今は仕込まないただし3観点の余地を設計に残す) の範囲外）
 - **`awscc_securityagent_target_domain` で HTTP_ROUTE 検証まで完了できるか** — 検証パスとトークンは computed 属性で読めるが、検証の完了を Terraform が待てるかは不明。成立すれば [Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) のブラウザ操作が1つ減る

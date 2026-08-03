@@ -34,15 +34,22 @@ AWS の2つのフロンティアエージェントに「実際に壊れたシス
 
 ## 現在の状態
 
-**構築の途中です。** AWS 上に**実在するのは `terraform/bootstrap/` の分だけ**（state バケット・OIDC・ECR・CloudTrail・予算）で、
-`terraform/main/`（ネットワーク・ALB・ECS・DynamoDB・アラーム・Agent Space）は**コードは揃っているがまだ apply していません**。`app/` は空です。
+**構築の途中です（Phase 0〜4 が完了）。** 2026-08-03 に `terraform/main/` の初回 apply が通り、
+**ネットワーク・ALB・ECS Fargate・DynamoDB・アラーム・Agent Space が AWS 上で稼働しています。**
+アプリ（`app/`）も実装済みで、フォーム送信が DynamoDB に入るところまで動いています。
 
-`terraform/main/` の初回 apply は CI が行います。**アプリのイメージが ECR に無い状態で apply すると ECS タスクが起動できない**ため、
-「build & push → apply」の順で走る CI（Phase 4）が最初の apply になります。
+残っているのは **Phase 5（エージェント接続。GitHub App の認可などブラウザ操作が必須）** と
+**Phase 6（受け入れ確認）** です。
 どこまで進んだかは [docs/plan/02-implementation-plan.md](./docs/plan/02-implementation-plan.md) の各 Phase の進捗表を見てください。
+
+デプロイは `main` へのマージだけで走ります（`docker build & push` → `terraform apply` → ECS の完了待ち）。
+**ローカルから `terraform/main/` に apply することはありません。**
 
 **この時点でのコードに、意図的な脆弱性はまだ入っていません。** 冒頭の警告は、
 このリポジトリが**これから脆弱性を入れる場所である**ことに対するものです。
+ベースラインでは `/admin` に認証を付け、セキュリティヘッダも出しています
+（**認証のない管理エンドポイントは、それ自体が仕込む予定の「故障」の1つ**であるため。
+[D-035](./docs/plan/00-decisions.md#d-035-ベースラインには観点3-の故障を1つも置かない)）。
 
 ## 構成
 

@@ -403,13 +403,39 @@ Hono ＋ TypeScript ＋ JSX、Node 22。
 
 ## Phase 4: CI/CD の拡充
 
+> **✅ 完了（2026-08-03）。** [run 30810215552](https://github.com/OR-Sasaki/devops-agent-form/actions/runs/30810215552) で
+> **`terraform/main/` の初回 apply（48 リソース）が成功し、ECS タスクが2台とも起動した。**
+> 実測値は [00-decisions.md の Phase 3・4 の実機確認結果](./00-decisions.md#phase-34-の実機確認結果2026-08-03) を参照。
+>
+> | 完了条件 | 結果 |
+> |---|---|
+> | 1. `main` への push で `deploy.yml` が通り、初回 apply が成功する | ✅ 6分15秒（apply は 3分36秒） |
+> | 2. ECS タスクが2台とも `RUNNING` で安定する | ✅ AZ 1a / 1c に分散、両方 `x86_64`、ALB ターゲットは2つとも healthy |
+> | 3. ALB でフォームが開き、DynamoDB に入り、`/admin` に出る | ✅ `/admin` は認証なし 401 / 認証あり 200 |
+> | 4. CloudWatch Logs に `COMMIT_SHA` を載せた構造化 JSON ログが届く | ✅ `--filter-pattern '{ $.commitSha = "…" }'` でヒットした |
+> | 5. `pr.yml` が PR で動き、plan 結果がコメントされる | ✅ [PR #1](https://github.com/OR-Sasaki/devops-agent-form/pull/1) |
+>
+> **項目2 は [Phase 6](#phase-6-受け入れ確認) の項目1 そのものであり、`assign_public_ip = true` が効いていることの実測になっている。**
+
 [Phase 1](#phase-1-ブートストラップ--最小-ci) で作った最小 `deploy.yml`（OIDC 疎通確認のみ）に、**ビルドと apply を足す**フェーズ。ゼロから作るのではない。
 
 **このフェーズの初回実行が `terraform/main/` の初回 apply になる。**
 ネットワーク・ALB・ECS・DynamoDB・アラーム・Agent Space がここで初めて実体化し、**同時にイメージも揃うのでタスクが起動できる。**
 [Phase 0](#phase-0-アカウント発行と前提確認) で潰しきれなかった SCP やクォータの問題があれば、ここで露見する。
+→ **露見しなかった。** SCP・クォータ・`awscc` のいずれも初回 apply を妨げなかった。
 
 **`pr.yml`**（新規）— app の lint / typecheck / test / build と、terraform の fmt / validate / plan。plan 結果を PR にコメント。
+
+**ジョブは3つに割る**（[D-036](./00-decisions.md#d-036-fork-からの-pr-では-aws-を使うジョブを実行しない)）。**Public リポジトリなので誰でも fork から PR を出せる**が、fork 由来の実行には OIDC トークンが渡らない。
+「AWS が要るか要らないか」の境界をジョブ境界に一致させ、**AWS が要るジョブだけを同一リポジトリ由来の PR に限定する。**
+
+| ジョブ | 中身 | AWS 認証情報 | fork からの PR |
+|---|---|---|---|
+| `app` | `npm ci` → lint / typecheck / test / build → `docker build`（push はしない） | 不要 | **走る** |
+| `terraform-check` | `fmt -check -recursive`、`init -backend=false` ＋ `validate` | 不要 | **走る** |
+| `terraform-plan` | OIDC → `init` → `plan` → PR にコメント | 必要 | **走らない** |
+
+**⚠️ `pull_request_target` は使わない。** fork のコードを書き込み権限つきで走らせるイベントであり、`AdministratorAccess` を持つロールが射程に入るこのリポジトリでは代償が大きすぎる（[D-036](./00-decisions.md#d-036-fork-からの-pr-では-aws-を使うジョブを実行しない)）。
 
 **`deploy.yml`**（`main` push / Phase 1 から拡張）— 順序が重要。
 
@@ -434,6 +460,15 @@ ECS デプロイ完了を待つ
 先に push しておかないと apply 時点でイメージが存在しないので、build&push が先。
 
 **長期アクセスキーは一切使わない。** OIDC のみ（D-009）。
+
+**実装時に決めた細部**
+
+- **ECR ログインは `aws ecr get-login-password | docker login` で行う。** `docker/login-action` を足すと [D-024](./00-decisions.md#d-024-サードパーティ-action-は完全長のコミット-sha-で固定する) で SHA 固定すべき依存が1つ増える。AWS CLI は `ubuntu-latest` にプリインストールされている
+- **`docker build --platform linux/amd64` を明示する。** `ubuntu-latest` は x86_64 なので既定でも一致するが、runner が変われば静かに壊れる。明示しておけば食い違いで落ちる
+- **未設定のリポジトリ変数を `-var` で渡さない。** 未設定の変数は空文字として渡ってくるが、**空文字は `null` ではない**ので `variables.tf` の validation に落ちる（`pentest_verification_path` は「`/` で始まること」を要求している）。渡さなければ既定の `null` が効く。シェル側で配列に積むかどうかを分岐させる
+- **`aws ecs wait services-stable` に `timeout` を重ねる。** 待ち自体は 15秒 × 40回（約10分）で諦めるが、[D-027](./00-decisions.md#d-027-ecs-のサーキットブレーカーと自動ロールバックを無効にする) でサーキットブレーカーを無効にしているため**壊れたイメージだと永遠に安定しない。** 二重に有限化しておく
+- **失敗時に ECS の診断を必ず吐く。** タスクが起動しない原因は見分けがつきにくいので、`stoppedReason` / `stopCode` / サービスイベント直近20件を `if: failure()` のステップで出す
+- **plan コメントは集計行を先頭に別掲する。** 48 リソースの plan は 55000 バイトの切り詰めに引っかかり、**一番読みたい末尾の `Plan: N to add` が消える**（PR #1 で実測して直した）
 
 ---
 
