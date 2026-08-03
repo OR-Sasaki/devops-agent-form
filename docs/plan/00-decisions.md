@@ -404,6 +404,21 @@ awscc は [Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と
 計画は「ALB の作成だけで3〜5分」を見込んでいたが、**apply 全体が 3分36秒で終わった。** `time_sleep` 30 秒と Agent Space 2つを含んだうえでこの値である。
 ジョブのタイムアウトを 45 分に取ったのは過剰だったが、**壊れたときに諦めるまでの時間**（`services-stable` の約10分）を含むので、この余裕は残す。
 
+**2回目のデプロイ（更新経路）も確認した** — [run 30810870748](https://github.com/OR-Sasaki/devops-agent-form/actions/runs/30810870748)。
+
+| ステップ | 初回（新規作成） | 2回目（更新） |
+|---|---|---|
+| `terraform apply` | 3分36秒（48 リソース作成） | **21 秒**（タスク定義の新リビジョン＋サービス更新のみ） |
+| `services-stable` の待ち | 1分24秒 | **3分12秒**（ローリング更新で入れ替えるぶん長い） |
+
+**ローリング更新中も無停止だった。** 入れ替えの最中に `GET /healthz` を10回連続で叩き、**非 200 が0回**。
+`deployment_minimum_healthy_percent = 100` / `deployment_maximum_percent = 200` が意図通り効いており、
+更新中は一時的に `runningCount = 3` になる（旧2台＋新1台）。
+更新後、ALB が返す `commitSha` が新しいコミットに切り替わることも確認した。
+
+> **「デプロイ = `terraform apply`」（[D-009](#d-009-アプリも-terraform-も-ci-から-apply-する完全-gitops)）が、作成だけでなく更新でも成立している。**
+> 観点1（AWS 設定起因）と観点2（コード起因）が同じ1本のデプロイイベントとして見える、という RCA デモの前提が実際に揃った。
+
 **awscc の3リソースは初回 apply で問題なく作られた** — 最も検証が薄いと見ていた部分だが、`plan` から `apply` まで追加の修正は不要だった。
 
 | リソース | 実測 |
@@ -455,9 +470,21 @@ devops-agent-form-alb-unhealthy-hosts   ALARM
 [D-028](#d-028-異常ホストアラームは-minimum-統計で見る) は「静かなときに鳴る」を文書からの**予測**として書いていたが、**予測ではなく実際の挙動だと確定した。**
 残る6つのアラームは `notBreaching` なのですべて `OK`。
 
+**そして疎通確認でリクエストを流した直後、このアラームは `OK` に戻った。**
+
+```
+Threshold Crossed: 1 datapoint [0.0 (03/08/26 11:42:00)] was not greater than
+or equal to the threshold (1.0) and 1 missing datapoint was treated as [Breaching].
+```
+
+→ **このアラームはトラフィックの有無で ALARM と OK を往復する。** 一方向に落ちたままになるのではない。
+
 > **デモ時の読み方に影響する。** このアラームが ALARM でも、それ単体では異常を意味しない。
+> **「直近にトラフィックがあったか」を先に確認しないと、状態を読み違える。**
 > [Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) の項目4 で閾値を見直すか、`treat_missing_data` を選び直すかを判断する。
 > **「全滅を無音にしない」ことと引き換えなので、単純に `notBreaching` へ戻すのは [D-028](#d-028-異常ホストアラームは-minimum-統計で見る) の判断を覆すことになる。**
+
+**サービスの `MemoryUtilization` は 1.3% → 4.9% で推移した**（Container Insights が `enhanced`）。健全時の値であり、閾値 80% までは十分に距離がある。
 
 ### GitHub
 
@@ -1462,6 +1489,14 @@ fork のコードをベースリポジトリの権限で走らせるイベント
 - ~~**`UnHealthyHostCount` のアラームが、トラフィックの無い時間帯に ALARM へ落ちるか**~~ → **✅ 落ちる（2026-08-03 に実測）。**
   初回 apply の直後、**ターゲットが2つとも `healthy` であるにもかかわらず ALARM になった**（`no datapoints were received for 2 periods and 2 missing datapoints were treated as [Breaching]`）。
   [D-028](#d-028-異常ホストアラームは-minimum-統計で見る) が予測として書いていた代償が、そのまま実際の挙動だった。**残るのは「どう扱うか」の判断で、[Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) の項目4 で決める**
-- **サービスの `MemoryUtilization` の分母が、タスク単位の 512 MiB とコンテナ単位の hard limit のどちらか** — [D-034](#d-034-観点-1-2-と-1-6-の想定症状を訂正する) の通り**公式ドキュメントからは決まらない。** 観点1-4 でメモリアラームが鳴るかがこれで変わる（設計自体はどちらでも成立する）。[Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) で実測する
+- **サービスの `MemoryUtilization` の分母が、タスク単位の 512 MiB とコンテナ単位の hard limit のどちらか** — [D-034](#d-034-観点-1-2-と-1-6-の想定症状を訂正する) の通り**公式ドキュメントからは決まらない。** 観点1-4 でメモリアラームが鳴るかがこれで変わる（設計自体はどちらでも成立する）。
+  → **⚠️ 「Phase 6 で実測する」は成立しない。健全な状態では測っても分からない。**
+  `fault_injection = "none"` のとき `local.container_memory_hard_limit` は `var.task_memory` と同じ **512** になる（`fault-injection.tf`）。
+  **2つの候補が同じ値なので、どちらが分母でもメトリクスは一致する。** 実際 2026-08-03 の実測値は 1.3〜4.9% で、どちらの解釈でも矛盾しない。
+  → **切り分けられるのは観点1-4 を実際に仕込んだとき（コンテナ側だけ 64 MiB に落としたとき）だけである。**
+  分母が 64 なら使用率は約8倍に跳ね、512 のままなら値は変わらない。**この一度の観測で決着する**
+
+- **`/admin` の認証（[D-035](#d-035-ベースラインには観点3-の故障を1つも置かない)）を Security Agent がどう評価するか** — ベースラインから観点3 の故障を外したが、**レート制限（観点3-6）だけは意図的に入れていない。**
+  [Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) の項目10 でこれが指摘されるかは分からない。指摘されても接続失敗ではないので合格とする、という扱いは D-035 に書いた
 - **観点1-5 で確実にスロットリングを起こす負荷条件** — 低容量プロビジョンド（1 WCU）に落とした後、どれだけの送信で `WriteThrottleEvents` が立つかは決めていない。故障を実際に仕込むときに詰める（[D-005](#d-005-故障は今は仕込まないただし3観点の余地を設計に残す) の範囲外）
 - **`awscc_securityagent_target_domain` で HTTP_ROUTE 検証まで完了できるか** — 検証パスとトークンは computed 属性で読めるが、検証の完了を Terraform が待てるかは不明。成立すれば [Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) のブラウザ操作が1つ減る
