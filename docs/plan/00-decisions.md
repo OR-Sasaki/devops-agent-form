@@ -2,10 +2,10 @@
 
 グリルセッションで確定した決定を、決まった順に記録する。用語は [CONTEXT.md](../../CONTEXT.md) に従う。
 
-**ステータス: 決定確定（D-001〜D-019）／未決事項なし／Phase 0 は項目6 を除き完了／検証期間は 2026-08-10 頃まで**
+**ステータス: 決定確定（D-001〜D-020）／未決事項なし／Phase 0 完了（項目6 は Phase 5 へ移送）／検証期間は 2026-08-10 頃まで**
 2026-08-02 のグリルセッションで全項目を解消。同日の外部レビューを受けて D-014・D-015 を追加し、[D-002](#d-002-実行基盤は-ecs-fargate--alb--dynamodb) のコスト見積りと [D-008](#d-008-リージョンは-ap-northeast-1-に統一) のリスク認識を訂正した。
 同日の [Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) の実機確認で D-016・D-017 を追加し、[D-008](#d-008-リージョンは-ap-northeast-1-に統一) の「3目標すべて東京で成立する」という記述を**再度訂正した**（[D-017](#d-017-目標2-の到達点を-agent-ready-specification-に縮小する) を参照）。
-[Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) 完了時に D-018・D-019 を追加した。以降に新しい判断が生じたら D-020 以降として追記する。
+[Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) 完了時に D-018・D-019 を、Phase 1 の着手準備で D-020 を追加した。以降に新しい判断が生じたら D-021 以降として追記する。
 
 ---
 
@@ -736,9 +736,22 @@ PR が返るなら望外の収穫であり、そのとき目標2 を戻せばよ
 
 ---
 
+## D-020: OIDC ロールの ARN はリポジトリ変数に逃がす
+
+**決定** — GitHub Actions が assume する IAM ロールの ARN を、ワークフローに直書きせず **GitHub のリポジトリ変数**（`vars.AWS_ROLE_ARN`）に置く。ワークフロー側は `${{ vars.AWS_ROLE_ARN }}` と書く。
+
+**理由** — ロール ARN には**アカウント ID が含まれる**。[D-010](#d-010-github-リポジトリは-publicor-sasakidevops-agent-form) でリポジトリを Public にするため、直書きするとアカウント ID が恒久的に公開される。
+アカウント ID は秘密情報ではなく、これ単体で悪用できるものでもない（[Phase 1](./02-implementation-plan.md#phase-1-ブートストラップ--最小-ci) で OIDC の `sub` を `repo:OR-Sasaki/devops-agent-form:*` に絞るため、他リポジトリからは assume できない）。だが**公開しないで済むものを公開する理由も無い。**
+
+**Secrets ではなく Variables を使う** — 秘密ではないため。[Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) のペンテスト検証用の値（`PENTEST_VERIFICATION_PATH` / `PENTEST_VERIFICATION_TOKEN`）も同じ理由で Variables に置く決まりになっており、**手順が揃う。**
+
+**帰結** — リポジトリ作成直後、`deploy.yml` が動く前に `gh variable set AWS_ROLE_ARN` が必要になる。[Phase 1](./02-implementation-plan.md#phase-1-ブートストラップ--最小-ci) の手順に組み込むこと。
+
+---
+
 ## 未決事項
 
-**判断事項は無い。** D-001〜D-019 で解消済み。新しい判断が生じたら D-020 以降として追記する。
+**判断事項は無い。** D-001〜D-020 で解消済み。新しい判断が生じたら D-021 以降として追記する。
 
 ### 未確認のまま残っている事実
 

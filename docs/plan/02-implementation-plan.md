@@ -223,6 +223,10 @@ TYPE が `shared-credentials-file` だと静的キーに負けている（[D-016
   bootstrap の state は**ローカル保持**で、リポジトリは **Public**。commit するとアカウント ID・バケット名・エンドポイント URL がそのまま公開される（[D-010](./00-decisions.md#d-010-github-リポジトリは-publicor-sasakidevops-agent-form) の緩和策）
 - **`deploy.yml` の最小版** — OIDC で assume し、**空の `terraform/main/` に対して `terraform init` と `plan` を通すだけ**のワークフロー。
   目的は OIDC と state の**疎通確認**であって、インフラを作ることではない（build & push・apply・デプロイ完了待ちは Phase 4 で足す）
+  → **ロール ARN は直書きせず `${{ vars.AWS_ROLE_ARN }}`**（[D-020](./00-decisions.md#d-020-oidc-ロールの-arn-はリポジトリ変数に逃がす)）。
+  リポジトリ作成直後、ワークフローを回す前に `gh variable set AWS_ROLE_ARN --body <arn>` が要る
+- **`README.md`** — **冒頭に警告を大書きする**（[D-010](./00-decisions.md#d-010-github-リポジトリは-publicor-sasakidevops-agent-form) の緩和策1）。
+  **リポジトリを公開する前に置くこと。** 公開してから足すのでは順序が逆になる
 
 **注意** — OIDC ロールの信頼ポリシーで `sub` を絞ること。絞らないと**任意のリポジトリからこのアカウントに入れる**。Public リポジトリなので特に重要。
 
