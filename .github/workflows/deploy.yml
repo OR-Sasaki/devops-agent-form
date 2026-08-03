@@ -1,0 +1,81 @@
+# Phase 1 の最小版。目的は OIDC と S3 バックエンドの疎通確認だけで、
+# インフラを作ることではない（terraform/main/ はまだ空）。
+#
+# Phase 4 でここに build & push・apply・デプロイ完了待ちを足す。
+# ゼロから作り直すのではなく、このファイルを拡張する。
+
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write # OIDC トークンの発行に必須。これが無いと assume できない
+  contents: read
+
+# apply を足した後に同時実行されると state のロック待ちで詰まるため、今のうちから直列化しておく
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-northeast-1
+  TF_VERSION: 1.13.0
+
+jobs:
+  terraform:
+    name: terraform init & plan
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: terraform/main
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # AWS_ROLE_ARN が未設定だと configure-aws-credentials が
+      # 「認証情報が無い」という分かりにくいエラーで落ちるので、先に潰す（D-020）
+      - name: Check AWS_ROLE_ARN is set
+        env:
+          AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+        run: |
+          if [ -z "$AWS_ROLE_ARN" ]; then
+            echo "::error::リポジトリ変数 AWS_ROLE_ARN が未設定です。gh variable set AWS_ROLE_ARN --body <role arn> を実行してください（D-020）。"
+            exit 1
+          fi
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          # ロール ARN にはアカウント ID が含まれる。Public リポジトリなので直書きしない（D-020）
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: gha-${{ github.run_id }}
+          # Actions のログも公開されるため、アカウント ID をマスクする
+          mask-aws-account-id: true
+
+      # ARN もアカウント ID もログに出さずに assume の成否だけを見る
+      - name: Verify assumed identity
+        run: |
+          aws sts get-caller-identity > /dev/null
+          echo "OIDC assume: OK"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      # S3 バックエンドから state を読めることの確認
+      - name: terraform init
+        run: terraform init -input=false
+
+      # use_lockfile = true なので plan はロックオブジェクトを S3 に PutObject して削除する。
+      # つまり plan が通れば state の読みだけでなく書きも通っている。
+      # 権限が無ければ「Error acquiring the state lock」で落ちる。
+      - name: terraform plan
+        run: terraform plan -input=false -lock-timeout=5m
