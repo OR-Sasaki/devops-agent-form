@@ -48,11 +48,12 @@ variable "github_owner_id" {
 variable "github_repo_id" {
   description = <<-EOT
     GitHub リポジトリの数値 ID。gh api repos/<owner>/<repo> --jq .id で取得する（D-023）。
-    リポジトリを作るまで存在しないので、初回 apply の時点では null でよい。
-    null の間は不変形式（repo:OWNER@ID/REPO@ID:*）の sub を信頼ポリシーに含めない。
+    リポジトリを作るまで存在しないので、初回 apply の時点だけ null にできる。
+    null の間は信頼ポリシーが旧形式の sub のままになるため、
+    リポジトリ作成後は必ず実値を入れて再 apply すること。
   EOT
   type        = number
-  default     = null
+  default     = 1321456466 # OR-Sasaki/devops-agent-form
 }
 
 variable "budget_limit_usd" {
