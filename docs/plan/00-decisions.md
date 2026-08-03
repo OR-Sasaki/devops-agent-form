@@ -2,12 +2,12 @@
 
 グリルセッションで確定した決定を、決まった順に記録する。用語は [CONTEXT.md](../../CONTEXT.md) に従う。
 
-**ステータス: 決定確定（D-001〜D-033）／未決事項なし／Phase 0・Phase 1・Phase 2 完了／検証期間は 2026-08-10 頃まで**
+**ステータス: 決定確定（D-001〜D-034）／未決事項なし／Phase 0・Phase 1・Phase 2 完了／検証期間は 2026-08-10 頃まで**
 2026-08-02 のグリルセッションで全項目を解消。同日の外部レビューを受けて D-014・D-015 を追加し、[D-002](#d-002-実行基盤は-ecs-fargate--alb--dynamodb) のコスト見積りと [D-008](#d-008-リージョンは-ap-northeast-1-に統一) のリスク認識を訂正した。
 同日の [Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) の実機確認で D-016・D-017 を追加し、[D-008](#d-008-リージョンは-ap-northeast-1-に統一) の「3目標すべて東京で成立する」という記述を**再度訂正した**（[D-017](#d-017-目標2-の到達点を-agent-ready-specification-に縮小する) を参照）。
 [Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) 完了時に D-018・D-019 を、Phase 1 の着手準備で D-020 を追加した。
 [Phase 1](./02-implementation-plan.md#phase-1-ブートストラップ--最小-ci) の実施中に、公開リポジトリへの露出に関する判断として D-021・D-022 を追加し、初回 push 直前の外部レビュー（Codex）の指摘を受けて D-023〜D-025 を追加した。
-[Phase 2](./02-implementation-plan.md#phase-2-インフラ本体を書く) で `terraform/main/` を書く過程で D-026〜D-033 を追加し、**アラーム表のメトリクスを1件訂正した**（[D-031](#d-031-dynamodb-のスロットリング監視は-throttleevents-で行う)）。以降に新しい判断が生じたら D-034 以降として追記する。
+[Phase 2](./02-implementation-plan.md#phase-2-インフラ本体を書く) で `terraform/main/` を書く過程で D-026〜D-033 を追加し、**アラーム表のメトリクスを1件訂正した**（[D-031](#d-031-dynamodb-のスロットリング監視は-throttleevents-で行う)）。初回コミット後の外部レビュー（7回目）を受けて D-034 を追加した。以降に新しい判断が生じたら D-035 以降として追記する。
 
 ---
 
@@ -1204,9 +1204,57 @@ Phase 4 を待たずに1行足したのは、[Phase 1](./02-implementation-plan.
 
 ---
 
+## D-034: 観点 1-2 と 1-6 の想定症状を訂正する
+
+**決定** — [01-fault-perspectives.md](./01-fault-perspectives.md) の観点1-2 と 1-6 に書かれていた**発現する症状を訂正する。** 仕込み方と期待回答は変えない。
+
+**経緯** — [Phase 2](./02-implementation-plan.md#phase-2-インフラ本体を書く) のコード（`c7b95a9`）に対する **7回目の外部レビュー（Codex）** で指摘され、公式ドキュメントで裏を取った。
+
+**1-2「ターゲット全台 unhealthy → 503」は誤り**
+
+ALB は**全ターゲットが unhealthy になると fail-open する。**
+[Health checks for Application Load Balancer target groups](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html) を 2026-08-03 に直接確認した。原文:
+
+> If a target group contains only unhealthy registered targets, the load balancer routes requests to all those targets, regardless of their health status. This means that if all targets fail health checks at the same time in all enabled Availability Zones, **the load balancer fails open**. The effect of the fail-open is to allow traffic to all targets in all enabled Availability Zones, regardless of their health status, based on the load balancing algorithm.
+
+→ アプリ自体は生きているので、**利用者のリクエストは成功し続ける。** 鳴るのは `UnHealthyHostCount` アラームだけ。
+
+> **観点そのものは壊れていない。** 期待回答は「ヘルスチェック設定の変更。**アプリ自体は生きている**」であり、
+> fail-open はその期待回答と**むしろ整合する**。誤っていたのは症状欄の記述だけである。
+
+**1-6「ECR から pull できずタスク起動失敗」は、そのままでは起きない**
+
+デフォルトルートを消しても**稼働中のタスクは走り続ける。** 失うのは DynamoDB と CloudWatch Logs への外向き通信である。
+ECR の pull が落ちるのは**次にタスクを起動しようとしたとき**なので、再現には `aws ecs update-service --force-new-deployment` 等でタスクの置き換えを起こす必要がある。
+
+**⚠️ その一手を Terraform に持ち込んではいけない。**
+故障の値をタスク定義の環境変数に載せれば置き換えは起きる（レビューが提案した対処がこれだった）が、
+**それでは Agent がタスク定義を読むだけで答えが分かってしまう。** [D-001](#d-001-デモの到達目標を3つとも狙う) の目標1（根本原因を突き止めさせる）が成立しなくなるので、採らない。
+タスク置き換えは**故障を仕込む人間の手順**として Terraform の外に置く。
+
+**⚠️ 副作用** — ALB も同じ public subnet に居る。インターネット向け ALB はデフォルトルートに依存するため、
+**この故障はサイト全体が到達不能になる方向に振れうる。** 1-6 を実際に使うときは織り込むこと。
+
+**レビューの3件目は採らなかった** — 「サービスの `MemoryUtilization` は分母がタスク定義の 512 MiB なので観点1-4 では発火できない」という指摘（severity: high）。
+**指摘の根拠として挙げられたページが、指摘と逆のことを書いている。**
+[Amazon ECS service utilization metrics](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service_utilization.html) の原文:
+
+> If you specify a soft limit (`memoryReservation`), it's used to calculate the amount of reserved memory. Otherwise, **the hard limit (`memory`) is used**.
+
+本構成は `memoryReservation` を指定せずコンテナ側の `memory`（故障時 64 MiB）だけを置いているので、**分母が 64 になる可能性がある。**
+そうであれば OOM 直前に 100% 近くまで上がり、アラームは鳴る。
+
+> **どちらが正しいかは文書からは決まらない。**「鳴らない」と断定した指摘は退けるが、「鳴る」とも言えない。
+> **未確認事項として残し、[Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) で実測する。**
+> 観点1-4 の根拠は元々 EventBridge のタスク停止イベント（`stoppedReason` に OOM が入る）なので、どちらに転んでも設計は成立する。
+
+**帰結** — 訂正は症状の記述と Terraform のコメントに閉じており、**リソース定義は1つも変わらない。** `terraform plan` の結果（45 リソース）も変わらない。
+
+---
+
 ## 未決事項
 
-**判断事項は無い。** D-001〜D-033 で解消済み。新しい判断が生じたら D-034 以降として追記する。
+**判断事項は無い。** D-001〜D-034 で解消済み。新しい判断が生じたら D-035 以降として追記する。
 
 ### 未確認のまま残っている事実
 
@@ -1223,4 +1271,6 @@ Phase 4 を待たずに1行足したのは、[Phase 1](./02-implementation-plan.
   → **[Phase 2](./02-implementation-plan.md#phase-2-インフラ本体を書く) で書く口だけは用意した**（[D-029](#d-029-エージェントの-github-連携は既定で無効にする)、既定は無効）。
   **`awscc_devopsagent_association` に渡す GitHub 用の `service_id` の実値は依然として不明で、コード中の `"github"` は確認した値ではない**
 - **`UnHealthyHostCount` のアラームが、トラフィックの無い時間帯に ALARM へ落ちるか** — [D-028](#d-028-異常ホストアラームは-minimum-統計で見る) で `breaching` の代償として引き受けたが、**実際の振れ方は文書からの予測であって実測ではない。** [Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) で観測する
+- **サービスの `MemoryUtilization` の分母が、タスク単位の 512 MiB とコンテナ単位の hard limit のどちらか** — [D-034](#d-034-観点-1-2-と-1-6-の想定症状を訂正する) の通り**公式ドキュメントからは決まらない。** 観点1-4 でメモリアラームが鳴るかがこれで変わる（設計自体はどちらでも成立する）。[Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) で実測する
+- **観点1-5 で確実にスロットリングを起こす負荷条件** — 低容量プロビジョンド（1 WCU）に落とした後、どれだけの送信で `WriteThrottleEvents` が立つかは決めていない。故障を実際に仕込むときに詰める（[D-005](#d-005-故障は今は仕込まないただし3観点の余地を設計に残す) の範囲外）
 - **`awscc_securityagent_target_domain` で HTTP_ROUTE 検証まで完了できるか** — 検証パスとトークンは computed 属性で読めるが、検証の完了を Terraform が待てるかは不明。成立すれば [Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) のブラウザ操作が1つ減る

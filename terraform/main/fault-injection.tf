@@ -29,7 +29,10 @@ locals {
   fault_deny_dynamodb_write = local.fault == "iam_denied"
 
   # 1-2 ALB のヘルスチェックパスを存在しないパスに変更
-  #     → ターゲット全台 unhealthy → 503。アプリ自体は生きている。
+  #     → ターゲット全台 unhealthy。アプリ自体は生きている。
+  #     ⚠️ 503 にはならない。ALB は全ターゲットが unhealthy になると fail-open し、
+  #        健康状態を無視して全ターゲットへルーティングする（公式ドキュメントで確認）。
+  #        鳴るのは UnHealthyHostCount アラームだけで、利用者から見た症状は無い。D-034 を参照。
   health_check_path = local.fault == "bad_healthcheck" ? "/__no_such_path__" : "/healthz"
 
   # 1-3 ALB → タスクの SG ingress を閉じる
@@ -48,8 +51,14 @@ locals {
   fault_dynamodb_provisioned = local.fault == "dynamodb_throttle"
 
   # 1-6 public subnet のデフォルトルートを落とす
-  #     → ECR からイメージを pull できずタスク起動失敗。
-  #     ⚠️ これは assign_public_ip の指定漏れと**症状が同一**（Phase 2 の必須要件を参照）。
+  #     ⚠️ ルートを消した瞬間には pull 失敗にならない（D-034）。
+  #        稼働中のタスクは走り続け、失うのは DynamoDB と CloudWatch Logs への外向き通信。
+  #        ECR の pull が落ちるのは**次にタスクを起動しようとしたとき**なので、
+  #        再現には aws ecs update-service --force-new-deployment 等でタスク置換を起こす。
+  #        ⚠️ その一手を Terraform に持ち込まないこと。故障の値をタスク定義の環境変数に載せれば
+  #           置き換えは起きるが、Agent がタスク定義を読むだけで答えが分かってしまう。
+  #     ⚠️ ALB も同じ public subnet に居るため、サイト全体が到達不能になる方向に振れうる。
+  #     ⚠️ pull 失敗の症状は assign_public_ip の指定漏れと同一（Phase 2 の必須要件を参照）。
   #        仕込んでいないのにこの症状が出たら、まず ecs.tf の assign_public_ip を疑うこと。
   fault_break_default_route = local.fault == "broken_route"
 }

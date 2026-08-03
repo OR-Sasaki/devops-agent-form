@@ -257,9 +257,21 @@ resource "aws_cloudwatch_metric_alarm" "ecs_cpu" {
 # アラーム 5: ECS メモリ使用率 — 観点 1-4 / 2-1
 # --------------------------------------------------------------------------
 
+#
+# ⚠️ 観点1-4 でこのアラームが鳴るかは**未確認**（D-034）。
+#
+# サービスの MemoryUtilization の分母は「タスク定義に指定されたメモリ」だが、
+# 公式ドキュメントは同時に「soft limit があればそれを、無ければ hard limit (memory) を使う」とも書いており、
+# **タスク単位の 512 MiB とコンテナ単位の 64 MiB のどちらが分母になるかが読み取れない。**
+#   分母が 64 なら OOM 直前に 100% 近くまで上がって鳴る
+#   分母が 512 なら 12.5% 程度にしかならず鳴らない
+# どちらであっても観点1-4 の根拠は EventBridge のタスク停止イベント（下記）なので設計は成立するが、
+# **この表の「1-4」の対応づけは実測で確かめるまで確定していない。** Phase 6 で観測する。
+#
+# 観点2-1（アプリのメモリリーク）は健全時の上限 512 MiB に対して漸増するので、こちらは素直に鳴る。
 resource "aws_cloudwatch_metric_alarm" "ecs_memory" {
   alarm_name        = "${var.project}-ecs-memory"
-  alarm_description = "ECS service memory utilization. Perspectives 1-4 and 2-1."
+  alarm_description = "ECS service memory utilization. Perspective 2-1 (and possibly 1-4)."
 
   namespace   = "AWS/ECS"
   metric_name = "MemoryUtilization"
