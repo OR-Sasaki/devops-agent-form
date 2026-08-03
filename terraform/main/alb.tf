@@ -113,9 +113,19 @@ resource "aws_lb_listener_rule" "pentest_verification" {
     type = "fixed-response"
 
     fixed_response {
-      content_type = "text/plain"
-      message_body = awscc_securityagent_target_domain.pentest[0].verification_details.http_route.token
-      status_code  = "200"
+      # ⚠️ 生のトークンではなく JSON で返す。公式ドキュメント（Enable an application domain
+      #    for penetration testing）が形式を明示している。原文:
+      #
+      #      Place the token provided by AWS Security Agent in the file using this format:
+      #        { "tokens": ["<insert-token>"] }
+      #
+      #    配列なのは、同じドメインを複数の Agent Space に登録したときに
+      #    両方のトークンを並べられるようにするため（同ページの Note）。
+      content_type = "application/json"
+      message_body = jsonencode({
+        tokens = [awscc_securityagent_target_domain.pentest[0].verification_details.http_route.token]
+      })
+      status_code = "200"
     }
   }
 }
