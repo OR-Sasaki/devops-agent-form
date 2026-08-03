@@ -449,14 +449,19 @@ OIDC で assume
 docker build & push  （タグ = コミット SHA）
   ↓
 terraform apply -var image_tag=<SHA>     ← Terraform がイメージタグを所有
-                -var pentest_verification_path=${{ vars.PENTEST_VERIFICATION_PATH }}
-                -var pentest_verification_token=${{ vars.PENTEST_VERIFICATION_TOKEN }}
+                -var connect_github_to_agents=true          （認可後に有効化。D-029）
+                -var register_pentest_target_domain=true    （D-038）
   ↓
 ECS デプロイ完了を待つ
 ```
 
-ペンテスト検証用の2変数は**未設定なら空**で、その場合は対応する ALB リスナールールが作られない（[Phase 3](#phase-3-アプリ)）。
-[Phase 5](#phase-5-エージェント接続) でリポジトリ変数に値を入れて再実行したときだけ、検証用の口が開く。**これにより apply 経路を CI 1本に保てる。**
+2つの真偽値は**未設定なら渡さない**ので、`variables.tf` の既定（どちらも `false`）が効いて何も作られない。
+[Phase 5](#phase-5-エージェント接続) でリポジトリ変数に `true` を入れて再実行したときだけ、対応する口が開く。**これにより apply 経路を CI 1本に保てる。**
+
+> **⚠️ ペンテスト検証用の値の渡し方は [D-038](./00-decisions.md#d-038-ターゲットドメインは-terraform-で登録し検証発火は-cli-で行う) で変わった。**
+> 以前は `PENTEST_VERIFICATION_PATH` / `PENTEST_VERIFICATION_TOKEN` に人が値を入れていたが、
+> **今は `awscc_securityagent_target_domain` の computed 属性から ALB のリスナールールへ直接渡る。**
+> リポジトリ変数は「登録するかどうか」の真偽値1つだけになった。
 
 **この順序である理由** — Terraform にイメージタグを所有させることで drift が出ない。
 そして「**デプロイ = terraform apply**」になるため、観点1（AWS 設定起因）と観点2（コード起因）が**同じ1本のデプロイイベント**として Agent から見える。RCA デモが自然に成立する。
@@ -469,7 +474,7 @@ ECS デプロイ完了を待つ
 
 - **ECR ログインは `aws ecr get-login-password | docker login` で行う。** `docker/login-action` を足すと [D-024](./00-decisions.md#d-024-サードパーティ-action-は完全長のコミット-sha-で固定する) で SHA 固定すべき依存が1つ増える。AWS CLI は `ubuntu-latest` にプリインストールされている
 - **`docker build --platform linux/amd64` を明示する。** `ubuntu-latest` は x86_64 なので既定でも一致するが、runner が変われば静かに壊れる。明示しておけば食い違いで落ちる
-- **未設定のリポジトリ変数を `-var` で渡さない。** 未設定の変数は空文字として渡ってくるが、**空文字は `null` ではない**ので `variables.tf` の validation に落ちる（`pentest_verification_path` は「`/` で始まること」を要求している）。渡さなければ既定の `null` が効く。シェル側で配列に積むかどうかを分岐させる
+- **未設定のリポジトリ変数を `-var` で渡さない。** 未設定の変数は空文字として渡ってくるが、**空文字は `null` でも `false` でもない**ので型変換か validation で落ちる。渡さなければ `variables.tf` の既定が効く。シェル側で配列に積むかどうかを分岐させる
 - **`aws ecs wait services-stable` に `timeout` を重ねる。** 待ち自体は 15秒 × 40回（約10分）で諦めるが、[D-027](./00-decisions.md#d-027-ecs-のサーキットブレーカーと自動ロールバックを無効にする) でサーキットブレーカーを無効にしているため**壊れたイメージだと永遠に安定しない。** 二重に有限化しておく
 - **失敗時に ECS の診断を必ず吐く。** タスクが起動しない原因は見分けがつきにくいので、`stoppedReason` / `stopCode` / サービスイベント直近20件を `if: failure()` のステップで出す
 - **plan コメントは集計行を先頭に別掲する。** 48 リソースの plan は 55000 バイトの切り詰めに引っかかり、**一番読みたい末尾の `Plan: N to add` が消える**（PR #1 で実測して直した）
@@ -512,20 +517,23 @@ AWS 公式サンプル [aws-samples/sample-terraform-for-security-agent](https:/
 1. GitHub App の認可 — DevOps Agent 側、Security Agent 側それぞれ
 2. **リポジトリ選択は必ず "Only select repositories"** で `devops-agent-form` のみ
    → "All" を選ぶと既存 27 リポジトリ全部がスコープに入る（D-006）
-3. ペネトレーションテストのターゲットドメイン登録（ALB の DNS 名）と **HTTP_ROUTE 検証**
-   → 提示されたパスとトークンを **GitHub Actions のリポジトリ変数**（`PENTEST_VERIFICATION_PATH` / `PENTEST_VERIFICATION_TOKEN`）に設定し、
-     `deploy.yml` を再実行して apply する（[Phase 3](#phase-3-アプリ) の ALB リスナールールが立つ）
+3. ~~ペネトレーションテストのターゲットドメイン登録（ALB の DNS 名）と **HTTP_ROUTE 検証**~~
+   → **ブラウザ操作は不要になった（[D-038](./00-decisions.md#d-038-ターゲットドメインは-terraform-で登録し検証発火は-cli-で行う)）。** 登録は Terraform、発火は CLI 1コマンドになった:
 
-   > **Terraform で完結できる可能性がある（[Phase 0](#phase-0-アカウント発行と前提確認) の発見・要実機確認）。**
-   > `awscc_securityagent_target_domain` は `verification_details.http_route.route_path` と `.token` を **computed 属性として返す**。
-   > つまりターゲットドメイン登録を Terraform で行えば、検証用のパスとトークンを**リポジトリ変数を経由せず ALB リスナールールへ直接渡せる**。
-   > 手作業とブラウザ操作が丸ごと消え、[Phase 3](#phase-3-アプリ) の `var.pentest_verification_path` / `var.pentest_verification_token` も不要になる。
-   > **ただし「検証の完了」まで Terraform が待てるかは未確認**（`verification_status` は computed で、検証を発火させる別の API があるかもしれない）。実機で確かめてから採用を決める
+   ```
+   gh variable set REGISTER_PENTEST_TARGET_DOMAIN --body true
+   gh workflow run deploy.yml --ref main          # 登録＋トークン配信まで Terraform が行う
+   aws securityagent verify-target-domain --target-domain-id <id> --profile devopsagent
+   ```
+
+   > **⚠️ ただし ALB の生 DNS 名では検証が完了しない（[D-042](./00-decisions.md#d-042-http_route-検証は-https-と有効な証明書を要求するドメインを取得して-dns_txt-に切り替える)）。**
+   > HTTP_ROUTE の検証は **HTTPS** で来て**有効な SSL 証明書**を要求し、`*.elb.amazonaws.com` に ACM のパブリック証明書は取れない。
+   > → **カスタムドメインを取得し、`DNS_TXT` に切り替える。** Route 53（同一アカウント）に置けば One-click verification が使える。
    → **ローカルから `terraform apply` しない。** `terraform/main/` の apply 経路は CI 1本に保つ（[D-009](./00-decisions.md#d-009-アプリも-terraform-も-ci-から-apply-する完全-gitops)）
-   → トークンは ALB 上で**公開配信される値**なので Secrets ではなく Variables でよい
    → キャンペーン型（D-011）なので期間中は 1 回で済む
-4. **ペンテストを実行する直前に、無料トライアルの残枠を確認する**（[D-015](./00-decisions.md#d-015-予算上限は月-100通知は管理アカウントのメールへ)）
-   → **$50 / task-hour** で、1回で予算上限 $100 の半分を消費しうる。[Phase 0](#phase-0-アカウント発行と前提確認) でも確認するが、構築期間中に枠が減っている可能性があるため**実行直前にもう一度見る**
+4. ~~**ペンテストを実行する直前に、無料トライアルの残枠を確認する**~~
+   → **不要になった（[D-040](./00-decisions.md#d-040-ペネトレーションテストは実行しない)）。** 項目9 の受け入れ条件は「ターゲット検証が完了している」であって「実行した」ではないため、
+     **ペンテスト自体は実行しない。** 実行する判断に戻すときは、コンソールで残枠を見るところからやり直すこと（[D-015](./00-decisions.md#d-015-予算上限は月-100通知は管理アカウントのメールへ) の制約は生きている）
 
 **注意 — GitHub App の単一インストール制約は2つのエージェントで異なる。まとめて扱わないこと。**
 
@@ -535,7 +543,8 @@ AWS 公式サンプル [aws-samples/sample-terraform-for-security-agent](https:/
 | **DevOps Agent** | **複数の AWS アカウント・リージョンから同じ GitHub アカウントに接続できる**（2026-06-30 に対応）。「If the AWS DevOps Agent GitHub App is already installed, additional accounts and Regions reuse the existing installation, so you don't need to reinstall it.」 | [What's new](https://docs.aws.amazon.com/devopsagent/latest/userguide/whats-new.html) |
 
 本プロジェクトは両方を同じデモアカウントに紐づけるため**実害は無い**が、Security Agent 側だけは
-**`OR-Sasaki` を他の AWS アカウントで使えなくなる**点が残る。撤収時にアンインストールするかはそのとき判断する。
+**`OR-Sasaki` を他の AWS アカウントで使えなくなる**点が残る。
+→ **撤収時にアンインストールすると決めた（[D-041](./00-decisions.md#d-041-撤収時に-security-agent-の-github-app-をアンインストールする)）。** デモアカウントを閉じると `OR-Sasaki` が消えたアカウントに紐づいたまま残るため。
 
 ---
 
@@ -543,19 +552,19 @@ AWS 公式サンプル [aws-samples/sample-terraform-for-security-agent](https:/
 
 **故障は仕込まない**（D-005）。確認するのは「**後から仕込める状態になっているか**」。
 
-| # | 確認項目 |
-|---|---|
-| 1 | **ECS タスクが 2台とも起動し、ECR の pull と CloudWatch Logs への送信が成功している**（`assign_public_ip` の検証。ここが通らないと以降は全て見られない） |
-| 2 | フォームが動き、送信内容が DynamoDB に入り、`/admin` に出る |
-| 3 | DevOps Agent のコンソールにトポロジー（ALB → ECS → DynamoDB）が出る |
-| 4 | アラームが**症状ごとに分かれて**存在し、閾値と欠損データ設定が入っている |
-| 5 | CloudTrail に設定変更が記録される（観点1の前提） |
-| 6 | `var.fault_injection` の口が通っている（観点1の前提） |
-| 7 | コミット SHA が**構造化ログ・イメージタグ・ECS タスク定義**の3箇所に残り、アラーム → ログ → コミットが辿れる（観点2の前提） |
-| 8 | GitHub が DevOps Agent と Security Agent の**両方**に接続済み（観点2・3の前提） |
-| 9 | ペンテストのターゲット検証が完了している（観点3の前提） |
-| 10 | PR を出すと Security Agent がコードレビューコメントを付ける |
-| 11 | **日次の実績が [D-002](./00-decisions.md#d-002-実行基盤は-ecs-fargate--alb--dynamodb) の見積り（1日 約 $1.8）の範囲に収まっている**ことを Cost Explorer で確認し、[D-015](./00-decisions.md#d-015-予算上限は月-100通知は管理アカウントのメールへ) の予算アラートが設定済み |
+| # | 確認項目 | 状態（2026-08-03 時点） |
+|---|---|---|
+| 1 | **ECS タスクが 2台とも起動し、ECR の pull と CloudWatch Logs への送信が成功している**（`assign_public_ip` の検証。ここが通らないと以降は全て見られない） | ✅ Phase 4 で確認 |
+| 2 | フォームが動き、送信内容が DynamoDB に入り、`/admin` に出る | ✅ Phase 4 で確認 |
+| 3 | DevOps Agent のコンソールにトポロジー（ALB → ECS → DynamoDB）が出る | 🚧 前提は確認済み（Resource Explorer に 35 件、association は `valid`）。**コンソールの目視が残る** |
+| 4 | アラームが**症状ごとに分かれて**存在し、閾値と欠損データ設定が入っている | ✅ 6本。[D-039](./00-decisions.md#d-039-unhealthyhostcount-は-breaching-のまま維持する) で `breaching` 維持と決定 |
+| 5 | CloudTrail に設定変更が記録される（観点1の前提） | ✅ セッション名 `gha-<run_id>` から Actions 実行まで辿れる |
+| 6 | `var.fault_injection` の口が通っている（観点1の前提） | ✅ **6値すべて** `plan` で確認（故障は仕込んでいない） |
+| 7 | コミット SHA が**構造化ログ・イメージタグ・ECS タスク定義**の3箇所に残り、アラーム → ログ → コミットが辿れる（観点2の前提） | ✅ Phase 4 で確認 |
+| 8 | GitHub が DevOps Agent と Security Agent の**両方**に接続済み（観点2・3の前提） | 🚧 **GitHub App の認可（ブラウザ）待ち** |
+| 9 | ペンテストのターゲット検証が完了している（観点3の前提） | 🚧 登録・トークン配信・発火の経路は動作確認済み。**証明書が要る**（[D-042](./00-decisions.md#d-042-http_route-検証は-https-と有効な証明書を要求するドメインを取得して-dns_txt-に切り替える)） |
+| 10 | PR を出すと Security Agent がコードレビューコメントを付ける | 🚧 項目8 待ち |
+| 11 | **日次の実績が [D-002](./00-decisions.md#d-002-実行基盤は-ecs-fargate--alb--dynamodb) の見積り（1日 約 $1.8）の範囲に収まっている**ことを Cost Explorer で確認し、[D-015](./00-decisions.md#d-015-予算上限は月-100通知は管理アカウントのメールへ) の予算アラートが設定済み | 🚧 **2026-08-04 以降でないと判定できない** |
 
 **項目11 が「月額」ではなく「日次」なのはなぜか** — [D-011](./00-decisions.md#d-011-撤収はキャンペーン型検証期間中は起動しっぱなし期間後に-destroy) で検証期間を約1週間としたため、**1ヶ月分の請求は決して発生しない。**
 「月 $55 の範囲に収まるか」では受け入れ判定ができないので、日次の実績で見る。
@@ -598,8 +607,14 @@ ALB の LCU・CloudWatch Logs・Container Insights・CloudTrail 保存は上記�
    > 本当に消すときは中身を空にしてから destroy する（`aws s3 rm s3://<bucket> --recursive` に加え、
    > **バージョンと削除マーカーの削除が要る**）。
    > ECR（`force_delete = true`）と CloudTrail 証跡バケット（`force_destroy = true`）はそのまま消える。
-3. 他アカウントで Security Agent を使う予定があるなら、**GitHub App をアンインストール**する
+3. **Security Agent の GitHub App を `OR-Sasaki` からアンインストールする**（[D-041](./00-decisions.md#d-041-撤収時に-security-agent-の-github-app-をアンインストールする)）
+
+   > **条件付きではなく必ず行う。** デモアカウントを閉じると `OR-Sasaki` が消えたアカウントに紐づいたまま残り、
+   > 将来別の AWS アカウントで Security Agent を使えなくなる。**DevOps Agent 側は外さなくてよい**（複数アカウントから同じ GitHub アカウントに接続できるため）。
 4. デモアカウント自体を閉鎖する場合は管理アカウントから
+
+   > **⚠️ ドメインを取得した場合、`terraform destroy` では消えない**（[D-042](./00-decisions.md#d-042-http_route-検証は-https-と有効な証明書を要求するドメインを取得して-dns_txt-に切り替える)）。
+   > 登録は最低1年で、デモアカウントを閉じるなら**移管するか失効させる**判断が要る。
 
 ---
 

@@ -2,13 +2,14 @@
 
 グリルセッションで確定した決定を、決まった順に記録する。用語は [CONTEXT.md](../../CONTEXT.md) に従う。
 
-**ステータス: 決定確定（D-001〜D-037）／未決事項なし／Phase 0・Phase 1・Phase 2・Phase 3・Phase 4 完了／検証期間は 2026-08-10 頃まで**
+**ステータス: 決定確定（D-001〜D-042）／Phase 0・Phase 1・Phase 2・Phase 3・Phase 4 完了／Phase 5・Phase 6 進行中／検証期間は 2026-08-10 頃まで**
 2026-08-02 のグリルセッションで全項目を解消。同日の外部レビューを受けて D-014・D-015 を追加し、[D-002](#d-002-実行基盤は-ecs-fargate--alb--dynamodb) のコスト見積りと [D-008](#d-008-リージョンは-ap-northeast-1-に統一) のリスク認識を訂正した。
 同日の [Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) の実機確認で D-016・D-017 を追加し、[D-008](#d-008-リージョンは-ap-northeast-1-に統一) の「3目標すべて東京で成立する」という記述を**再度訂正した**（[D-017](#d-017-目標2-の到達点を-agent-ready-specification-に縮小する) を参照）。
 [Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) 完了時に D-018・D-019 を、Phase 1 の着手準備で D-020 を追加した。
 [Phase 1](./02-implementation-plan.md#phase-1-ブートストラップ--最小-ci) の実施中に、公開リポジトリへの露出に関する判断として D-021・D-022 を追加し、初回 push 直前の外部レビュー（Codex）の指摘を受けて D-023〜D-025 を追加した。
 [Phase 2](./02-implementation-plan.md#phase-2-インフラ本体を書く) で `terraform/main/` を書く過程で D-026〜D-033 を追加し、**アラーム表のメトリクスを1件訂正した**（[D-031](#d-031-dynamodb-のスロットリング監視は-throttleevents-で行う)）。初回コミット後の外部レビュー（7回目）を受けて D-034 を追加した。
-[Phase 3](./02-implementation-plan.md#phase-3-アプリ)・[Phase 4](./02-implementation-plan.md#phase-4-cicd-の拡充) の着手時に、計画が決めていなかった2件（`/admin` の認証と fork からの PR の扱い）を D-035・D-036 として決めた。初回 apply の後に永続的な差分が見つかり D-037 を追加した。以降に新しい判断が生じたら D-038 以降として追記する。
+[Phase 3](./02-implementation-plan.md#phase-3-アプリ)・[Phase 4](./02-implementation-plan.md#phase-4-cicd-の拡充) の着手時に、計画が決めていなかった2件（`/admin` の認証と fork からの PR の扱い）を D-035・D-036 として決めた。初回 apply の後に永続的な差分が見つかり D-037 を追加した。
+[Phase 5](./02-implementation-plan.md#phase-5-エージェント接続)・[Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) の実施中に、未決だった判断4件を D-038〜D-041 として決め、**[D-007](#d-007-ドメインは決め打ちしない) と [D-028](#d-028-異常ホストアラームは-minimum-統計で見る) の前提が実測で覆った**ため D-042 を追加した。以降に新しい判断が生じたら D-043 以降として追記する。
 
 ---
 
@@ -55,9 +56,33 @@
 
 **ペネトレーションテストのターゲットドメイン検証**
 
-- 検証方式は **DNS_TXT** と **HTTP_ROUTE** の2つ。**AWS はテストを検証済みドメインに対してのみ実行する**
-- **ALB が対象の場合は HTTP_ROUTE が推奨。** エージェントがパスとトークンを提示し、HTTP で取得して検証する。ALB は元々到達可能なのでそのまま通る
-- → **カスタムドメインは必須ではない。** ALB の生 DNS 名で成立する
+- 検証方式は **DNS_TXT** / **HTTP_ROUTE** / **PRIVATE_VPC** の3つ（CLI の `create-target-domain --verification-method` の許容値で確認）。**AWS はテストを検証済みドメインに対してのみ実行する**
+- **検証の発火は独立した API である。** `aws securityagent verify-target-domain --target-domain-id <id>`。登録（`create-target-domain`）とは別物で、**Terraform からは発火できない**（[D-038](#d-038-ターゲットドメインは-terraform-で登録し検証発火は-cli-で行う)）
+- ~~**ALB が対象の場合は HTTP_ROUTE が推奨。** エージェントがパスとトークンを提示し、HTTP で取得して検証する。ALB は元々到達可能なのでそのまま通る~~
+- ~~→ **カスタムドメインは必須ではない。** ALB の生 DNS 名で成立する~~
+
+> **⚠️ この2行は誤りだった（2026-08-03 に実測で判明）。** 詳細と対応は [D-042](#d-042-http_route-検証は-https-と有効な証明書を要求するドメインを取得して-dns_txt-に切り替える) を参照。
+> **HTTP_ROUTE の検証リクエストは HTTPS で来る。** 公式ドキュメント [Enable an application domain for penetration testing](https://docs.aws.amazon.com/securityagent/latest/userguide/enable-test-domain.html) を 2026-08-03 に直接確認した。原文:
+>
+> - 「Return to the Target Domains table, select the domain, and choose **Verify**. AWS Security Agent sends an **HTTPS GET** request to the verification URL and validates the token.」
+> - 「If the domain is accessible on the public internet, make sure that your domain has a **valid SSL certificate** before running verification.」
+>
+> 実際に `verify-target-domain` を叩いた結果も同じで、**`https://` で取りに来て接続タイムアウトした**（本構成の ALB はポート 80 のみ）。
+>
+> ```
+> Verification failed for https://devops-agent-form-….elb.amazonaws.com/.well-known/aws/securityagent-domain-verification.json:
+> connection timed out while attempting to query endpoint
+> ```
+>
+> **`*.elb.amazonaws.com` に対して ACM のパブリック証明書は取得できない**（ドメインを所有しているのは AWS であり、DNS/メール検証を通せない）。
+> したがって **ALB の生 DNS 名では HTTP_ROUTE 検証は原理的に完了しない。**
+
+**HTTP_ROUTE のトークンファイルの形式と置き場所**（同ページで確認。実測とも一致）
+
+- パス — `.well-known/aws/securityagent-domain-verification.json`。**API が返す `routePath` には先頭の `/` が付かない**（実測）。ALB の path-pattern は `/` 始まりでないと一致しないため、そのまま渡すと**ルールは作られるが永久に一致しない**
+- 中身 — **生のトークンではなく JSON**。原文: 「Place the token provided by AWS Security Agent in the file using this format: `{ "tokens": ["<insert-token>"] }`」。配列なのは同じドメインを複数の Agent Space に登録したときに両方のトークンを並べられるようにするため
+
+**検証を通せないときのバイパス経路がある**（同ページ）— 原文: 「Customers who have authorization to perform penetration testing on an endpoint but cannot complete ownership verification can request manual verification from us. Please open a customer support case to make this request.」
 
 ### awscc プロバイダのスキーマ検証（Phase 0 項目5）
 
@@ -486,6 +511,85 @@ or equal to the threshold (1.0) and 1 missing datapoint was treated as [Breachin
 
 **サービスの `MemoryUtilization` は 1.3% → 4.9% で推移した**（Container Insights が `enhanced`）。健全時の値であり、閾値 80% までは十分に距離がある。
 
+### Phase 5・6 の実機確認結果（2026-08-03）
+
+すべて実測であり、推測は含まない。
+
+**`UnHealthyHostCount` が ALARM に落ちた原因は、トラフィックの有無ではなかった（前回の解釈を訂正する）**
+
+[Phase 3・4 の実機確認結果](#phase-34-の実機確認結果2026-08-03) は「このアラームはトラフィックの有無で ALARM と OK を往復する」と書いていたが、**これは誤った一般化だった。**
+
+| 時刻 (UTC) | 観測 |
+|---|---|
+| 11:39・11:40 | `UnHealthyHostCount` の **datapoint が存在しない** |
+| 11:41:41 | 2 missing datapoints → `breaching` 扱いで **ALARM** |
+| **11:42 以降** | **毎分 `0.0` が途切れず報告される**（48/48 datapoint） |
+| 11:45:41 | **OK** に復帰 |
+| 12:00〜12:25 | **`RequestCount` が 0 のまま。それでもアラームは OK のまま** |
+
+→ **メトリクスが欠けていたのは「登録ターゲットがまだ無い」ALB 作成中の数分間だけである。**
+これは公式の Reporting criteria **「Reported if there are registered targets」**とそのまま一致する。
+[D-028](#d-028-異常ホストアラームは-minimum-統計で見る) が代償として引き受けた「静かな時間帯に鳴る」は、**少なくとも本構成では発生していない**（同ページの「only when requests are flowing through the load balancer」は、この指標の実挙動とは一致しなかった）。
+
+> **観測窓は約1時間である。** 「二度と鳴らない」と言えるだけの長さではないが、
+> **「トラフィックが無いと鳴る」という因果は、25分間の無トラフィックで鳴らなかったことで否定できる。**
+> 判断は [D-039](#d-039-unhealthyhostcount-は-breaching-のまま維持する) を参照。
+
+**CloudTrail に「誰が・いつ・何を」が揃っている（[Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) 項目5）**
+
+`UpdateService` の記録を1件そのまま読んだ結果:
+
+| 項目 | 値 |
+|---|---|
+| `userIdentity.arn` | `arn:aws:sts::308513050613:assumed-role/devops-agent-form-github-actions/`**`gha-30811804110`** |
+| `userAgent` | `… Terraform/1.13.0 … terraform-provider-aws/6.57.1 …` |
+| `requestParameters.taskDefinition` | `…:task-definition/devops-agent-form:4` |
+
+> **セッション名が `gha-<GitHub Actions の run_id>` になっているため、CloudTrail の1レコードから Actions の実行、さらにコミットまで一意に辿れる。**
+> [観点2](./01-fault-perspectives.md#観点2-アプリコード起因) の相関経路（アラーム → ログ → タスク定義 → コミット）とは**独立した2本目の経路**であり、観点1（AWS 設定起因）ではこちらが主経路になる。
+
+**`var.fault_injection` の口は6値すべて通っている（項目6）**
+
+`plan` のみで確認した（**故障は仕込んでいない**。[D-005](#d-005-故障は今は仕込まないただし3観点の余地を設計に残す)）。
+
+| 値 | plan に出た変更 |
+|---|---|
+| `iam_denied` | `aws_iam_role_policy.ecs_task_dynamodb` を更新 |
+| `bad_healthcheck` | `aws_lb_target_group.app` を更新 |
+| `closed_sg` | `aws_vpc_security_group_ingress_rule.ecs_from_alb[0]` を破棄 |
+| `low_memory` | `aws_ecs_task_definition.app` を置換 |
+| `dynamodb_throttle` | `aws_dynamodb_table.submissions` を更新 |
+| `broken_route` | `aws_route.public_default[0]` を破棄 |
+
+不正値（`bogus`）は `variables.tf` の validation が拒否することも確認した。
+
+**⚠️ ローカルの `terraform plan` で drift を見るときはダミーのイメージタグを使ってはいけない**
+
+[D-032](#d-032-イメージタグは-default-を持たない必須変数にする) は「ローカルからは `-var image_tag=bootstrap`」と書いているが、
+**この値で plan すると必ず 3 件の差分**（タスク定義の置換＋サービス更新）が出る。実際にデプロイ済みのイメージタグと食い違うためで、drift ではない。
+
+```
+Plan: 1 to add, 1 to change, 1 to destroy.
+```
+
+→ **`plan` が空であることを確認したいときは、実際にデプロイされているコミット SHA を渡す。**
+`-var image_tag=$(git rev-parse HEAD)`（`main` が最後にデプロイされたコミットである場合）。
+この値で `No changes.` になることを確認済み。
+
+**DevOps Agent がトポロジーの土台を自前で作っていた（項目3 の前提）**
+
+- `devops-agent get-association` が **`"status": "valid"`**、`validate-aws-associations` が**指摘ゼロ**を返す
+- **Resource Explorer のインデックスが複数リージョンに自動作成されていた。** [devops-agent.tf](../../terraform/main/devops-agent.tf) が Agent Space ロールに与えた `iam:CreateServiceLinkedRole` が実際に使われたということ
+- インデックスを検索すると **ALB → ECS（クラスタ・サービス・タスク定義）→ DynamoDB が揃って登録されている**（`devops-agent-form` で 35 件）
+
+**エージェントの GitHub 連携について CLI から判明したこと**
+
+| 事実 | 根拠 |
+|---|---|
+| **DevOps Agent の GitHub 連携は `register-service` では登録できない** | `--service` の許容値は dynatrace / servicenow / pagerduty / gitlab / eventChannel / mcpserver 系 / azureidentity / remoteagent 系のみで、**GitHub が無い。** help に「Services that can be registered via the post-registration API (**excludes OAuth 3LO services**)」と明記されている。→ **ブラウザでの OAuth 認可が必須**という [D-004](#d-004-手作業はアカウント発行のみ以降すべて-terraform) の例外は正しかった |
+| **`associate-service` は GitHub を受け付ける** | `--configuration` のタグ付きユニオンに `github` があり、必須は `repoName` / `repoId` / `owner` / `ownerType`（`organization` または `user`）。**`awscc_devopsagent_association.configuration.git_hub` と同じ形** |
+| **Security Agent の GitHub 認可は API から開始できる** | `securityagent initiate-provider-registration --provider GITHUB` が `redirectTo`（`https://github.com/apps/aws-security-agent/installations/new`）と `csrfState` を返す。**ただし state の渡し方は確認できていない**ので、コンソールから開始するほうが確実 |
+
 ### GitHub
 
 ユーザー `OR-Sasaki`（org 無し、public repo 27）。`gh` の token scope に `repo` と `workflow` あり → リポジトリ作成も Actions も可能。
@@ -633,7 +737,15 @@ ALB の LCU、CloudWatch Logs、Container Insights、CloudTrail の保存料は�
 - ドメインが決まった時点で、Route53 ホストゾーン＋ACM 証明書＋ALB の HTTPS リスナーを**後付けできる**形にしておく
 - 既存アカウント <既存メンバー A> が持つ既存ドメインは**使わない**（別アカウントであり、方針とも合わない）
 
-**この決定が成立する根拠** — Security Agent のペネトレーションテストは **HTTP_ROUTE 検証**で ALB の生 DNS 名のまま通る。したがってドメインが無くても観点3のデモは成立する。ドメインは「HTTPS を付けたくなったときの後付け要素」に過ぎない。
+~~**この決定が成立する根拠** — Security Agent のペネトレーションテストは **HTTP_ROUTE 検証**で ALB の生 DNS 名のまま通る。したがってドメインが無くても観点3のデモは成立する。ドメインは「HTTPS を付けたくなったときの後付け要素」に過ぎない。~~
+
+> **⚠️ この根拠は 2026-08-03 に実測で覆った（[D-042](#d-042-http_route-検証は-https-と有効な証明書を要求するドメインを取得して-dns_txt-に切り替える)）。**
+> **HTTP_ROUTE 検証は HTTPS で来て、有効な SSL 証明書を要求する。** `*.elb.amazonaws.com` に対して ACM のパブリック証明書は取れないため、
+> **ALB の生 DNS 名では検証が原理的に完了しない。** ドメインは「後付け要素」ではなく、**観点3のペネトレーションテストの前提条件**だった。
+>
+> **決定そのもの（計画中に特定のドメイン名を前提にしない）は維持する。** 以下の設計制約もすべて生きている
+> —— `var.domain_name` は任意変数のままで、未指定なら ALB の DNS 名で動く。
+> 覆ったのは「**ドメインが無くても観点3が成立する**」という部分だけである。
 
 ---
 
@@ -970,7 +1082,11 @@ PR が返るなら望外の収穫であり、そのとき目標2 を戻せばよ
 **理由** — ロール ARN には**アカウント ID が含まれる**。[D-010](#d-010-github-リポジトリは-publicor-sasakidevops-agent-form) でリポジトリを Public にするため、直書きするとアカウント ID が恒久的に公開される。
 アカウント ID は秘密情報ではなく、これ単体で悪用できるものでもない（[Phase 1](./02-implementation-plan.md#phase-1-ブートストラップ--最小-ci) で OIDC の `sub` を `repo:OR-Sasaki/devops-agent-form:*` に絞るため、他リポジトリからは assume できない）。だが**公開しないで済むものを公開する理由も無い。**
 
-**Secrets ではなく Variables を使う** — 秘密ではないため。[Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) のペンテスト検証用の値（`PENTEST_VERIFICATION_PATH` / `PENTEST_VERIFICATION_TOKEN`）も同じ理由で Variables に置く決まりになっており、**手順が揃う。**
+**Secrets ではなく Variables を使う** — 秘密ではないため。~~[Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) のペンテスト検証用の値（`PENTEST_VERIFICATION_PATH` / `PENTEST_VERIFICATION_TOKEN`）も同じ理由で Variables に置く決まりになっており、**手順が揃う。**~~
+
+> **この2つのリポジトリ変数は [D-038](#d-038-ターゲットドメインは-terraform-で登録し検証発火は-cli-で行う) で消滅した。** 検証トークンは Terraform が computed 属性から直接 ALB へ渡すようになり、人手を経由しない。
+> **`AWS_ROLE_ARN` を Variables に置く判断自体は変わらない。** 現在のリポジトリ変数は `AWS_ROLE_ARN` と、
+> エージェント連携・ターゲットドメイン登録を有効化する2つの真偽値（`CONNECT_GITHUB_TO_AGENTS` / `REGISTER_PENTEST_TARGET_DOMAIN`）である。
 
 **帰結** — リポジトリ作成直後、`deploy.yml` が動く前に `gh variable set AWS_ROLE_ARN` が必要になる。[Phase 1](./02-implementation-plan.md#phase-1-ブートストラップ--最小-ci) の手順に組み込むこと。
 
@@ -1210,6 +1326,15 @@ git rev-list --objects --all                    # 全 blob を直接 cat-file �
 → **誰もアクセスしていない時間帯に、このアラームが ALARM に落ちることがある。**
 「全滅を見逃す」より「静かなときに鳴る」ほうがましだと判断した。ただし**これは実測ではなく文書からの予測**であり、実際にどう振れるかは [Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) で観測して必要なら閾値ごと見直す。
 
+> **⚠️ この代償は実在しなかった（2026-08-03 に実測。[D-039](#d-039-unhealthyhostcount-は-breaching-のまま維持する)）。**
+> **`RequestCount` が 0 の25分間も、`UnHealthyHostCount` は毎分 `0.0` を報告し続け、アラームは OK のままだった。**
+> 初回 apply の直後に ALARM へ落ちたのは事実だが、原因は「トラフィックが無い」ことではなく
+> **「ALB 作成中でまだ登録ターゲットが無い」**ことで、これは上に引用した Reporting criteria
+> 「Reported if there are registered targets」の側と一致する。
+> 引用した「only when requests are flowing」のほうは、**この指標の実挙動とは一致しなかった。**
+>
+> → **代償が無いのだから、引き換えに得ていた「全滅を無音にしない」だけが残る。** [D-039](#d-039-unhealthyhostcount-は-breaching-のまま維持する) で維持と決めた。
+
 ---
 
 ## D-029: エージェントの GitHub 連携は既定で無効にする
@@ -1238,6 +1363,11 @@ Phase 3 は `app/` のコードを書くフェーズで、このルールは1行
 [D-007](#d-007-ドメインは決め打ちしない) の `domain_name` と同じ「未指定でも成立する任意変数」の形なので、Phase 2 に前倒ししても Phase 3・Phase 4 の内容は変わらない。
 
 **Phase 3 に残るもの** — 無い。この項目に関して [Phase 3](./02-implementation-plan.md#phase-3-アプリ) がやることは無くなった。
+
+> **⚠️ 2つの変数は [D-038](#d-038-ターゲットドメインは-terraform-で登録し検証発火は-cli-で行う) で削除した。** リスナールール自体は `alb.tf` に残っており、
+> **値の出どころだけが「リポジトリ変数」から「`awscc_securityagent_target_domain` の computed 属性」に変わった。**
+> **「実体はアプリではなく ALB のリスナールールである」という D-030 の判断は、そのまま正しかった** ——
+> 置き場所が `alb.tf` だったからこそ、値の供給元を差し替えるだけで済んだ。
 
 ---
 
@@ -1275,6 +1405,17 @@ Phase 4 を待たずに1行足したのは、[Phase 1](./02-implementation-plan.
 渡す値が `github.sha` なのは [Phase 4](./02-implementation-plan.md#phase-4-cicd-の拡充) の apply と同じ値であり、**`plan` は ECR にイメージが実在するかを確認しない**ので、push 前でも通る。
 
 **ローカルから plan するときは `-var image_tag=bootstrap` を付ける。** [Phase 2](./02-implementation-plan.md#phase-2-インフラ本体を書く) が言う「plan を通すためだけのダミー値」がこれにあたる。
+
+> **⚠️ ただし初回 apply 以降、このダミー値で drift を判定してはいけない（2026-08-03 に実測）。**
+> デプロイ済みのイメージタグと食い違うため、**`plan` は必ずタスク定義の置換とサービス更新を計画する。**
+>
+> ```
+> Plan: 1 to add, 1 to change, 1 to destroy.
+> ```
+>
+> これは drift ではなく**ダミー値の副作用**である。`plan` が空であることを確認したいときは、
+> **実際にデプロイされているコミット SHA を渡す** —— `-var image_tag=$(git rev-parse HEAD)`。
+> [D-037](#d-037-awscc-の永続的な差分は-config-側を-api-に合わせて潰す) が守ろうとしている「`plan` の出力が信用できる状態」は、**読み方まで含めて初めて成立する。**
 
 ---
 
@@ -1501,17 +1642,145 @@ fork のコードをベースリポジトリの権限で走らせるイベント
 
 ---
 
+## D-038: ターゲットドメインは Terraform で登録し、検証発火は CLI で行う
+
+**決定** — ペネトレーションテストのターゲットドメインを `awscc_securityagent_target_domain` で**登録**し、
+computed で返る検証用の値を **ALB のリスナールールへ直接**渡す。**検証の発火だけは CLI で行う。**
+
+```
+terraform apply (CI)                     ← 登録。トークンが computed で返る
+  awscc_securityagent_target_domain
+        │ verification_details.http_route.{route_path, token}
+        ▼
+  aws_lb_listener_rule.pentest_verification
+
+aws securityagent verify-target-domain --target-domain-id <id>   ← 発火。ここだけ CLI
+```
+
+**なぜ Terraform だけで完結しないのか（CLI で確認した事実）** — **`verify-target-domain` は独立した API である。**
+`awscc` は Cloud Control API 越しの **CRUDL しか行わず**、アクション系 API を呼ぶ口を持たない。
+`verification_status` が computed なので「読める」が、**「待てる」わけではない。**
+
+**この決定で消えたもの** — `var.pentest_verification_path` / `var.pentest_verification_token` と、
+リポジトリ変数 `PENTEST_VERIFICATION_PATH` / `PENTEST_VERIFICATION_TOKEN`、およびブラウザ操作。
+**トークンが人手を1度も経由しなくなった。**
+
+**残した安全弁** — `var.register_pentest_target_domain`（既定 `false`）で囲った。
+[D-029](#d-029-エージェントの-github-連携は既定で無効にする) と同じ理由で、**未検証の `awscc` リソースを初めて動かすときは、失敗を1つの変更に切り分けられる状態で有効化する。**
+
+**⚠️ apply が通っても、実際に URL を取得するまで正しさは分からない。** 実際に2件の誤りが apply 後に見つかった。
+
+| 誤り | 症状 |
+|---|---|
+| API が返す `routePath` に**先頭の `/` が無い** | ALB の path-pattern が**永久に一致せず**、リクエストはアプリへ流れて 404。plan も apply も通る |
+| トークンを**生のまま** `text/plain` で返していた | 公式指定は `{"tokens": ["<token>"]}` の JSON |
+
+→ **[D-037](#d-037-awscc-の永続的な差分は-config-側を-api-に合わせて潰す) の教訓がそのまま2度目に効いた。** `awscc` を足したら apply 後に `plan` を回すだけでなく、
+**そのリソースが実際に外から期待通りに見えるかまで確かめる。**
+
+**却下** — **ブラウザで登録し、提示された値をリポジトリ変数に入れて再 apply する**（当初の計画）。
+成立はするが、**公開配信されるだけの値を人が2回コピーする**手順が残る。
+[D-011](#d-011-撤収はキャンペーン型検証期間中は起動しっぱなし期間後に-destroy) のキャンペーン型なら1回で済むとはいえ、ALB を作り直すたびに再取得が要る。
+
+---
+
+## D-039: UnHealthyHostCount は breaching のまま維持する
+
+**決定** — `treat_missing_data = "breaching"` を維持する。**[D-028](#d-028-異常ホストアラームは-minimum-統計で見る) を覆さない。**
+
+**理由 — 覆す動機だった「静かな時間帯の偽陽性」が、実測で否定された。**
+[Phase 5・6 の実機確認結果](#phase-56-の実機確認結果2026-08-03) の通り、**`RequestCount` が 0 の25分間もアラームは OK のままだった。**
+メトリクスが欠けていたのは「登録ターゲットがまだ無い」ALB 作成中の数分間だけで、これは公式の Reporting criteria
+**「Reported if there are registered targets」**と一致する。
+
+> **つまり [D-028](#d-028-異常ホストアラームは-minimum-統計で見る) が「代償」として引き受けたものは、本構成では発生していない。**
+> 代償が無いのだから、**それと引き換えに得ていた「タスク全滅を無音にしない」だけが残る。** 覆す理由が無い。
+
+**引き受けたリスク** — 観測窓は約1時間で、「二度と鳴らない」ことの証明ではない。
+**ALB を作り直すたびに、作成中の数分間は同じ ALARM が出る**（実際に初回 apply で出た）。
+デモ中に ALB を作り直す変更は入れない方針（[D-011](#d-011-撤収はキャンペーン型検証期間中は起動しっぱなし期間後に-destroy)・[D-026](#d-026-故障注入は-locals-で効果値を算出する)）なので、実害は初回だけである。
+
+**却下**
+
+- **`notBreaching` に戻す** — 偽陽性が実在しないので、得るものが無い。**タスク全滅時にメトリクスごと消えて最も重い障害が無音になる**という [D-028](#d-028-異常ホストアラームは-minimum-統計で見る) の懸念だけが残る
+- **デモ中は常時トラフィックを流す** — 運用手順が増えるだけで、**アラーム状態はトラフィックに依存しないことが分かった**以上、得るものが無い
+
+---
+
+## D-040: ペネトレーションテストは実行しない
+
+**決定** — [Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) の項目9 は**ターゲットドメインの検証完了までで閉じる。** ペネトレーションテスト自体は実行しない。
+
+**理由** — 項目9 の受け入れ条件は「**ターゲット検証が完了している**」であって「実行した」ではない。
+一方コストは **$50 / task-hour** で、[D-015](#d-015-予算上限は月-100通知は管理アカウントのメールへ) の上限 $100 の半分を1回で消費しうる。
+**無料トライアルの残枠は CLI から読めない**（[Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) 項目6 で確認済み。`securityagent` に使用量系 API が無く、`freetier get-free-tier-usage` は空を返す）ため、
+**残枠が読めないまま実行してはいけない**という [D-015](#d-015-予算上限は月-100通知は管理アカウントのメールへ) の制約が最後まで解けない。
+
+**帰結**
+
+- `awscc_securityagent_pentest` は**書かない。** Terraform に置くと `apply` が課金を発火させることになり、「デプロイ = `terraform apply`」（[D-009](#d-009-アプリも-terraform-も-ci-から-apply-する完全-gitops)）と正面から衝突する
+- **コンソールでの残枠確認も不要になった。** 実行しないので確認する意味が無い
+- **検証済みドメインは残るので、後から実行する判断に戻せる。** 失うものは無い
+
+---
+
+## D-041: 撤収時に Security Agent の GitHub App をアンインストールする
+
+**決定** — 撤収手順（[02-implementation-plan.md](./02-implementation-plan.md#コストと撤収) の項目3）として、**Security Agent の GitHub App を `OR-Sasaki` からアンインストールする。**
+
+**理由** — 「A GitHub App can only be installed once to a GitHub account or GitHub organization.」（[Connect to GitHub](https://docs.aws.amazon.com/securityagent/latest/userguide/connect-github.html)）。
+**デモアカウントは撤収時に閉じる可能性がある**（[02-implementation-plan.md](./02-implementation-plan.md#コストと撤収) の項目4）ため、放置すると
+**`OR-Sasaki` が「消えたアカウントに紐づいたまま」になり、将来別の AWS アカウントで Security Agent を使えなくなる。**
+
+代償は撤収時の作業が1つ増えるだけで、**非対称性が大きい。**
+
+**⚠️ DevOps Agent 側は外さなくてよい。** [What's new](https://docs.aws.amazon.com/devopsagent/latest/userguide/whats-new.html) の 2026-06-30 の項の通り、複数の AWS アカウントから同じ GitHub アカウントに接続できるため、同じ問題が起きない。**2つのエージェントで扱いが違う。**
+
+---
+
+## D-042: HTTP_ROUTE 検証は HTTPS と有効な証明書を要求する。ドメインを取得して DNS_TXT に切り替える
+
+**決定** — カスタムドメインを取得し、ターゲットドメインの検証方式を **HTTP_ROUTE から DNS_TXT へ切り替える。**
+
+**経緯 — [D-007](#d-007-ドメインは決め打ちしない) の成立根拠が実測で覆った。** [D-007](#d-007-ドメインは決め打ちしない) はこう書いていた。
+
+> **この決定が成立する根拠** — Security Agent のペネトレーションテストは **HTTP_ROUTE 検証**で ALB の生 DNS 名のまま通る。したがってドメインが無くても観点3のデモは成立する。
+
+**これは誤りである。** 公式ドキュメントと実測の両方が、HTTPS と有効な証明書を要求している（原文は[調査済みの外部事実](#aws-security-agent)に引用した）。
+
+そして **`*.elb.amazonaws.com` に対して ACM のパブリック証明書は取得できない。** そのドメインを所有しているのは AWS であり、
+DNS 検証もメール検証も通せない。→ **ALB の生 DNS 名では、HTTP_ROUTE 検証は原理的に完了しない。**
+
+**なぜ DNS_TXT を選ぶか** — **証明書の問題を丸ごと回避できる。**
+DNS_TXT はドメインの所有を TXT レコードで示すだけで、**HTTPS も証明書も要求しない。**
+加えてドメインを Route 53（同一アカウント）に置けば、公式の **One-click verification** が使える。原文:
+
+> **If the domain is registered in Route 53 (same AWS account):** AWS Security Agent can create the DNS record automatically.
+
+**⚠️ ドメイン代は検証期間より長く残る。** [D-011](#d-011-撤収はキャンペーン型検証期間中は起動しっぱなし期間後に-destroy) の検証期間は約1週間だが、**ドメイン登録は最低1年である。**
+`terraform destroy` では消えず、デモアカウントを閉じる場合は移管するか失効させることになる。
+**インフラのコスト見積り（[D-002](#d-002-実行基盤は-ecs-fargate--alb--dynamodb)）の外側にある費用**として、ここに明記しておく。
+
+**却下**
+
+- **自己署名証明書を ACM にインポートして 443 を開ける** — 公式が「**valid** SSL certificate」と書いており、公開インターネット上の検証元が信頼しない証明書を通す見込みが薄い。**確かめていないので「通らない」と断定はしない**が、ドメインを取れば確実に解決する問題に対して、不確実な回避策を試す順序ではない
+- **サポートケースで手動検証を依頼する** — 公式に経路がある（原文は[調査済みの外部事実](#aws-security-agent)に引用）。だが応答待ちが検証期間（〜2026-08-10）に収まる保証が無い
+- **項目9 を未達のまま閉じる** — 登録・トークン配信・検証発火の経路はすべて動いており、**残るのは証明書だけ**である。ここで止めると[観点3](./01-fault-perspectives.md#観点3-セキュリティ起因)の「実際にデプロイされたものに到達できるか」が確かめられないまま終わる
+
+---
+
 ## 未決事項
 
-**判断事項は無い。** D-001〜D-037 で解消済み。新しい判断が生じたら D-038 以降として追記する。
+**判断事項は無い。** D-001〜D-042 で解消済み。新しい判断が生じたら D-043 以降として追記する。
 
 ### 未確認のまま残っている事実
 
 判断ではなく、実機で確かめる項目。
 
-- **Security Agent の無料トライアル残枠**（[Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) 項目6）— CLI からは取得できなかった。コンソールで確認する。**ペンテスト実行前に必ず**（[D-015](#d-015-予算上限は月-100通知は管理アカウントのメールへ)）
-  → **トライアルの「期間」は制約にならない**（[D-011](#d-011-撤収はキャンペーン型検証期間中は起動しっぱなし期間後に-destroy) で1週間以内に全削除する方針が決まったため、2ヶ月枠の内側に収まる）。
-  **確認が要るのは「残枠」のほう。** 使い切っていればペンテスト1回 $50/task-hour が実費になり、[D-015](#d-015-予算上限は月-100通知は管理アカウントのメールへ) の上限 $100 の半分を消費しうる
+- ~~**Security Agent の無料トライアル残枠**（[Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) 項目6）~~ → **✅ 確認が不要になった（2026-08-03）。**
+  CLI から読めないことは変わらない（`securityagent` に使用量系 API が無く、`freetier get-free-tier-usage` は空を返す）が、
+  **[D-040](#d-040-ペネトレーションテストは実行しない) でペンテストを実行しないと決めたため、残枠を知る必要が消えた。**
+  実行する判断に戻すときは、コンソールで残枠を見るところからやり直すこと（[D-015](#d-015-予算上限は月-100通知は管理アカウントのメールへ) の制約は生きている）
 - ~~**`devops-agent get-account-usage` が `AccessDenied` になる理由**~~ → **✅ 解決（2026-08-03）。仮説①「オンボード前は使えない」が正しかった。**
   [Phase 4](./02-implementation-plan.md#phase-4-cicd-の拡充) の初回 apply で DevOps Agent の Agent Space が実体化した直後に再試行したところ、**`ap-northeast-1` では正常に応答するようになった**（`monthlyAccountInvestigationHours` 等の4項目、いずれも `limit: -1` / `usage: 0.0`）。
   **一方 `us-east-1` は `AccessDeniedException` のままである。** そちらには Agent Space を作っていない。
@@ -1523,9 +1792,10 @@ fork のコードをベースリポジトリの権限で走らせるイベント
 - **DevOps Agent の GitHub 連携を Terraform でどこまで書けるか**（[awscc プロバイダのスキーマ検証](#awscc-プロバイダのスキーマ検証phase-0-項目5) を参照）。[Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) で確認する。
   → **[Phase 2](./02-implementation-plan.md#phase-2-インフラ本体を書く) で書く口だけは用意した**（[D-029](#d-029-エージェントの-github-連携は既定で無効にする)、既定は無効）。
   **`awscc_devopsagent_association` に渡す GitHub 用の `service_id` の実値は依然として不明で、コード中の `"github"` は確認した値ではない**
-- ~~**`UnHealthyHostCount` のアラームが、トラフィックの無い時間帯に ALARM へ落ちるか**~~ → **✅ 落ちる（2026-08-03 に実測）。**
-  初回 apply の直後、**ターゲットが2つとも `healthy` であるにもかかわらず ALARM になった**（`no datapoints were received for 2 periods and 2 missing datapoints were treated as [Breaching]`）。
-  [D-028](#d-028-異常ホストアラームは-minimum-統計で見る) が予測として書いていた代償が、そのまま実際の挙動だった。**残るのは「どう扱うか」の判断で、[Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) の項目4 で決める**
+- ~~**`UnHealthyHostCount` のアラームが、トラフィックの無い時間帯に ALARM へ落ちるか**~~ → **✅ 落ちない（2026-08-03 に実測。一度目の結論を訂正した）。**
+  初回 apply の直後に ALARM になったのは事実だが、**原因はトラフィックの不在ではなく「ALB 作成中でまだ登録ターゲットが無かった」ことだった。**
+  `RequestCount` が 0 の25分間もアラームは OK のままで、メトリクスは毎分 `0.0` を報告し続けている（[Phase 5・6 の実機確認結果](#phase-56-の実機確認結果2026-08-03)）。
+  → **[D-028](#d-028-異常ホストアラームは-minimum-統計で見る) が代償として書いていた偽陽性は、本構成では発生しない。** 扱いは [D-039](#d-039-unhealthyhostcount-は-breaching-のまま維持する) で「維持」と決めた
 - **サービスの `MemoryUtilization` の分母が、タスク単位の 512 MiB とコンテナ単位の hard limit のどちらか** — [D-034](#d-034-観点-1-2-と-1-6-の想定症状を訂正する) の通り**公式ドキュメントからは決まらない。** 観点1-4 でメモリアラームが鳴るかがこれで変わる（設計自体はどちらでも成立する）。
   → **⚠️ 「Phase 6 で実測する」は成立しない。健全な状態では測っても分からない。**
   `fault_injection = "none"` のとき `local.container_memory_hard_limit` は `var.task_memory` と同じ **512** になる（`fault-injection.tf`）。
@@ -1536,4 +1806,7 @@ fork のコードをベースリポジトリの権限で走らせるイベント
 - **`/admin` の認証（[D-035](#d-035-ベースラインには観点3-の故障を1つも置かない)）を Security Agent がどう評価するか** — ベースラインから観点3 の故障を外したが、**レート制限（観点3-6）だけは意図的に入れていない。**
   [Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) の項目10 でこれが指摘されるかは分からない。指摘されても接続失敗ではないので合格とする、という扱いは D-035 に書いた
 - **観点1-5 で確実にスロットリングを起こす負荷条件** — 低容量プロビジョンド（1 WCU）に落とした後、どれだけの送信で `WriteThrottleEvents` が立つかは決めていない。故障を実際に仕込むときに詰める（[D-005](#d-005-故障は今は仕込まないただし3観点の余地を設計に残す) の範囲外）
-- **`awscc_securityagent_target_domain` で HTTP_ROUTE 検証まで完了できるか** — 検証パスとトークンは computed 属性で読めるが、検証の完了を Terraform が待てるかは不明。成立すれば [Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) のブラウザ操作が1つ減る
+- ~~**`awscc_securityagent_target_domain` で HTTP_ROUTE 検証まで完了できるか**~~ → **✅ 完了できない（2026-08-03 に実測）。理由は2つあり、性質が違う。**
+  1. **検証の発火が別 API である。** `verify-target-domain` は独立したアクション系 API で、`awscc`（Cloud Control の CRUDL のみ）からは呼べない。
+     ただし**登録とトークン配信は Terraform で完結する**ので、ブラウザ操作とリポジトリ変数は消えた（[D-038](#d-038-ターゲットドメインは-terraform-で登録し検証発火は-cli-で行う)）
+  2. **そもそも ALB の生 DNS 名では HTTP_ROUTE 検証が成立しない。** 検証は HTTPS で来て有効な証明書を要求し、`*.elb.amazonaws.com` に ACM のパブリック証明書は取れない（[D-042](#d-042-http_route-検証は-https-と有効な証明書を要求するドメインを取得して-dns_txt-に切り替える)）
