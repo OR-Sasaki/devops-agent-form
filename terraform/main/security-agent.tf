@@ -88,14 +88,42 @@ resource "awscc_securityagent_agent_space" "main" {
   ]
 }
 
-# ペネトレーションテストのターゲットドメイン（awscc_securityagent_target_domain）と
-# ペンテスト本体（awscc_securityagent_pentest）はここでは作らない。
+# --------------------------------------------------------------------------
+# ペネトレーションテストのターゲットドメイン（Phase 5 / D-038）
+# --------------------------------------------------------------------------
 #
-#   ターゲットドメイン — ALB の DNS 名が要るので、ALB 作成後にしか登録できない。
-#     加えて HTTP_ROUTE 検証を Terraform が「完了まで待てるか」が未確認である
-#     （verification_details.http_route.route_path / .token は computed で読めることまでは
-#      スキーマで確認済み）。Phase 5 で実機確認してから採否を決める。
+# ALB の DNS 名を検証対象として登録する。ドメインを取っていないので生の DNS 名を使う（D-007）。
 #
-#   ペンテスト — $50 / task-hour（D-015）。無料トライアルの残枠を確認してからでないと
-#     予算上限 $100 の半分を1回で消費しうる。Terraform に置くと apply が課金を発火させることになり、
-#     「デプロイ = terraform apply」（D-009）と相性が悪い。実行判断は人間が握る。
+# ⚠️ 登録と検証は別物である。ここでやるのは**登録**だけ。
+#
+#   登録   awscc_securityagent_target_domain（このリソース）
+#   検証   aws securityagent verify-target-domain --target-domain-id <id>
+#
+# Terraform は検証を発火できない。awscc は Cloud Control API 越しの CRUDL しか行わず、
+# verify-target-domain のような**アクション系 API を呼ぶ口を持たない**。
+# verification_status は computed なので「読める」が、「待てる」わけではない。
+# → 検証は apply の後に CLI で1回叩く。この切り分けが D-038 の結論である。
+#
+# ⚠️ ALB を作り直すと DNS 名が変わり、検証済みドメインが失効する（D-011）。
+#    Phase 5 以降、ALB を破棄する変更を入れないこと。
+#
+# ペンテスト本体（awscc_securityagent_pentest）は**作らない**。$50 / task-hour（D-015）で、
+# Terraform に置くと apply が課金を発火させることになり「デプロイ = terraform apply」（D-009）
+# と相性が悪い。実行判断は人間が握る。D-040 で「検証まででフェーズを閉じる」と決めた。
+
+resource "awscc_securityagent_target_domain" "pentest" {
+  count = var.register_pentest_target_domain ? 1 : 0
+
+  target_domain_name = aws_lb.main.dns_name
+
+  # ALB が対象なら HTTP_ROUTE が推奨（調査済みの外部事実）。
+  # ALB は元々外部到達可能なので、DNS_TXT のようにゾーンを触る必要が無い。
+  verification_method = "HTTP_ROUTE"
+
+  # ⚠️ awscc に default_tags は無いので明示的に付ける。
+  #    なお securityagent の tags は NESTING=list（devopsagent 側は set）。
+  tags = [
+    { key = "Project", value = var.project },
+    { key = "ManagedBy", value = "terraform/main" },
+  ]
+}

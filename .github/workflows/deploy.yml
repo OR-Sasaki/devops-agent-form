@@ -121,28 +121,26 @@ jobs:
       - name: terraform apply
         working-directory: terraform/main
         env:
-          PENTEST_VERIFICATION_PATH: ${{ vars.PENTEST_VERIFICATION_PATH }}
-          PENTEST_VERIFICATION_TOKEN: ${{ vars.PENTEST_VERIFICATION_TOKEN }}
           CONNECT_GITHUB_TO_AGENTS: ${{ vars.CONNECT_GITHUB_TO_AGENTS }}
+          REGISTER_PENTEST_TARGET_DOMAIN: ${{ vars.REGISTER_PENTEST_TARGET_DOMAIN }}
         run: |
           set -euo pipefail
 
           # ⚠️ 未設定のリポジトリ変数を -var で渡してはいけない。
-          #    未設定の変数は空文字として渡ってくるが、空文字は null ではないので
-          #    variables.tf の validation に落ちる（pentest_verification_path は
-          #    「/ で始まること」を要求している）。渡さなければ default の null が効く。
+          #    未設定の変数は空文字として渡ってくるが、空文字は null でも false でもないので
+          #    型変換か validation で落ちる。渡さなければ variables.tf の default が効く。
           args=(-input=false -auto-approve -lock-timeout=10m -var "image_tag=${GITHUB_SHA}")
 
-          if [ -n "${PENTEST_VERIFICATION_PATH}" ]; then
-            args+=(-var "pentest_verification_path=${PENTEST_VERIFICATION_PATH}")
-          fi
-          if [ -n "${PENTEST_VERIFICATION_TOKEN}" ]; then
-            args+=(-var "pentest_verification_token=${PENTEST_VERIFICATION_TOKEN}")
-          fi
           # Phase 5 で GitHub App の認可を済ませた後に true にする（D-029）。
           # 認可より前に true にすると、存在しない連携を参照して apply が落ちる。
           if [ "${CONNECT_GITHUB_TO_AGENTS}" = "true" ]; then
             args+=(-var "connect_github_to_agents=true")
+          fi
+          # ペンテストのターゲットドメインを Terraform で登録する（D-038）。
+          # 検証トークンは computed 属性から ALB のリスナールールへ直接渡るので、
+          # 旧 PENTEST_VERIFICATION_PATH / _TOKEN のリポジトリ変数はもう要らない。
+          if [ "${REGISTER_PENTEST_TARGET_DOMAIN}" = "true" ]; then
+            args+=(-var "register_pentest_target_domain=true")
           fi
 
           terraform apply "${args[@]}"

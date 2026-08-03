@@ -61,3 +61,28 @@ output "security_agent_space_id" {
   description = "Security Agent の Agent Space ID"
   value       = awscc_securityagent_agent_space.main.agent_space_id
 }
+
+output "pentest_target_domain_id" {
+  description = <<-EOT
+    ペネトレーションテストのターゲットドメイン ID（D-038）。
+    var.register_pentest_target_domain が false なら null。
+
+    apply の後、この値で検証を発火させる:
+
+      aws securityagent verify-target-domain --target-domain-id <この値> --profile devopsagent
+  EOT
+  value       = one(awscc_securityagent_target_domain.pentest[*].target_domain_id)
+}
+
+output "pentest_verification_status" {
+  description = <<-EOT
+    ターゲットドメインの検証状態。**apply 時点の値であって最新ではない**。
+
+    Terraform は検証を発火できず（awscc は Cloud Control の CRUDL のみ）、
+    verify-target-domain は別 API である。したがってこの output は
+    「登録直後の状態」を映すだけで、検証の完了判定には使えない。最新は CLI で読む:
+
+      aws securityagent batch-get-target-domains --target-domain-ids <id> --profile devopsagent
+  EOT
+  value       = one(awscc_securityagent_target_domain.pentest[*].verification_status)
+}

@@ -142,29 +142,24 @@ variable "fault_injection" {
 # 計画では Phase 3 の節に書かれているが、実体は ALB のリスナールールなので alb.tf にある。
 # Phase 2 でまとめて書いた理由は D-030 を参照。
 
-variable "pentest_verification_path" {
+variable "register_pentest_target_domain" {
   description = <<-EOT
-    HTTP_ROUTE 検証でトークンを置くパス。AWS が Phase 5 のブラウザ操作の途中で提示する。
-    未指定なら検証用のリスナールールは作られない。
+    ペネトレーションテストのターゲットドメイン（= ALB の DNS 名）を Terraform で登録するか。
+    **既定は false**。
+
+    true にすると security-agent.tf の awscc_securityagent_target_domain が作られ、
+    computed で返る verification_details.http_route の route_path と token が
+    alb.tf のリスナールールへ**直接**渡る。値が人手やリポジトリ変数を経由しない。
+
+    ⚠️ 登録だけでは検証は完了しない。検証は別 API の発火が要る（D-038）。
+
+      aws securityagent verify-target-domain --target-domain-id <id> --profile devopsagent
+
+    ⚠️ 既定を false にしてあるのは D-029 と同じ理由。未検証の awscc リソースを
+    初めて動かすので、失敗したときに「この変更のせい」と切り分けられる状態で有効化する。
   EOT
-  type        = string
-  default     = null
-
-  validation {
-    condition     = var.pentest_verification_path == null || can(regex("^/[A-Za-z0-9._~/-]*$", var.pentest_verification_path))
-    error_message = "pentest_verification_path は / で始まるパスで指定すること。"
-  }
-}
-
-variable "pentest_verification_token" {
-  description = <<-EOT
-    HTTP_ROUTE 検証で返すトークン。AWS が Phase 5 のブラウザ操作の途中で提示する。
-
-    ⚠️ これは Secrets ではなく Variables に置く（D-020 と同じ扱い）。
-    ALB 上で誰でも取得できるよう**公開配信するための値**であって、秘密ではないため。
-  EOT
-  type        = string
-  default     = null
+  type        = bool
+  default     = false
 }
 
 # --------------------------------------------------------------------------

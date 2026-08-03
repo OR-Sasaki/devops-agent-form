@@ -66,14 +66,18 @@ resource "aws_lb_listener" "http" {
 #
 # AWS がターゲットドメイン検証で提示するパスにトークンを置き、HTTP で取得させる。
 # アプリ側ではなく ALB 側に置くのは、**アプリを再デプロイせずに値を差せる**ため。
-# 値が判明するのは Phase 5 のブラウザ操作の途中なので、この差が効く。
 #
-# 両方の変数が指定されたときだけ作られる。既定は null なので、通常は何も作られない。
-# 値の入れ方は「リポジトリ変数に設定して deploy.yml を再実行」（D-020 と同じ経路）。
+# ⚠️ 値の出どころが Phase 5 で変わった（D-038）。
+#
+#   旧: ブラウザで提示された値を人がリポジトリ変数に入れ、-var で渡す
+#   新: awscc_securityagent_target_domain が computed で返す値を**直接**参照する
+#
+# トークンが人手もリポジトリ変数も経由しなくなり、ブラウザ操作が丸ごと消えた。
+# 登録と検証発火の切り分けは security-agent.tf のコメントを参照。
 # ⚠️ ローカルから apply しない。apply 経路は CI 1本に保つ（D-009）。
 
 resource "aws_lb_listener_rule" "pentest_verification" {
-  count = var.pentest_verification_path != null && var.pentest_verification_token != null ? 1 : 0
+  count = var.register_pentest_target_domain ? 1 : 0
 
   listener_arn = aws_lb_listener.http.arn
 
@@ -83,7 +87,7 @@ resource "aws_lb_listener_rule" "pentest_verification" {
 
   condition {
     path_pattern {
-      values = [var.pentest_verification_path]
+      values = [awscc_securityagent_target_domain.pentest[0].verification_details.http_route.route_path]
     }
   }
 
@@ -92,7 +96,7 @@ resource "aws_lb_listener_rule" "pentest_verification" {
 
     fixed_response {
       content_type = "text/plain"
-      message_body = var.pentest_verification_token
+      message_body = awscc_securityagent_target_domain.pentest[0].verification_details.http_route.token
       status_code  = "200"
     }
   }
