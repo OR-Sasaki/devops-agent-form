@@ -85,6 +85,64 @@ resource "aws_iam_role_policy" "ecs_task_dynamodb" {
 }
 
 # --------------------------------------------------------------------------
+# /admin の Basic 認証パスワード（D-035）
+# --------------------------------------------------------------------------
+#
+# ベースラインの /admin には認証を付ける。認証の無い管理エンドポイントは
+# 観点3-4 の**故障そのもの**であり、最初から置くと Phase 6 項目10
+# （この時点のコードに脆弱性は無い、という前提）が崩れるため。
+#
+# ⚠️ 値をリポジトリにもタスク定義の environment にも平文で置かない。
+#    ハードコードすれば観点3-3（ハードコードされたシークレット）を先に仕込むことになる。
+#    Terraform が生成 → SSM Parameter Store の SecureString → ECS の secrets で注入、と繋ぐ。
+#
+# ⚠️ 実行ロールに要るのは ssm:GetParameters **だけ**である。
+#    ECS 公式ドキュメント（Amazon ECS task execution IAM role / Secrets Manager or
+#    Systems Manager permissions）は kms:Decrypt について
+#    「Required only if your secret uses a customer managed key and not the default key」
+#    と明記している。ここは key_id を指定しない = 既定の AWS マネージドキー（alias/aws/ssm）
+#    なので、KMS の許可は要らない。2026-08-03 に原文を直接確認した。
+#
+# 人間が値を読むときは、CI ではなく手元から取る（CI のログに出さないため）:
+#   aws ssm get-parameter --name /devops-agent-form/admin-password \
+#     --with-decryption --query Parameter.Value --output text --profile devopsagent
+
+resource "random_password" "admin" {
+  length = 32
+
+  # 記号を使わない。Basic 認証の値として手でコピーする場面があり、
+  # シェルやブラウザの URL 欄でのエスケープ事故のほうが現実的なリスクだから。
+  # 英数字 32 文字（62^32 ≈ 2^190）で総当たりへの強度は十分に足りる。
+  special = false
+}
+
+resource "aws_ssm_parameter" "admin_password" {
+  name        = "/${var.project}/admin-password"
+  description = "Basic auth password for the /admin console."
+  type        = "SecureString"
+  value       = random_password.admin.result
+
+  tags = {
+    Name = "${var.project}-admin-password"
+  }
+}
+
+data "aws_iam_policy_document" "ecs_execution_secrets" {
+  statement {
+    sid       = "ReadAdminPassword"
+    effect    = "Allow"
+    actions   = ["ssm:GetParameters"]
+    resources = [aws_ssm_parameter.admin_password.arn]
+  }
+}
+
+resource "aws_iam_role_policy" "ecs_execution_secrets" {
+  name   = "ssm-secrets"
+  role   = aws_iam_role.ecs_execution.id
+  policy = data.aws_iam_policy_document.ecs_execution_secrets.json
+}
+
+# --------------------------------------------------------------------------
 # タスク定義
 # --------------------------------------------------------------------------
 
@@ -132,6 +190,15 @@ resource "aws_ecs_task_definition" "app" {
         { name = "AWS_REGION", value = var.region },
         { name = "PORT", value = tostring(var.container_port) },
         { name = "NODE_ENV", value = "production" },
+        # ユーザー名は秘密ではないので平文でよい。パスダウンは下の secrets 側（D-035）。
+        { name = "ADMIN_USERNAME", value = var.admin_username },
+      ]
+
+      # ⚠️ environment ではなく secrets で渡す。
+      #    environment に置くと値がタスク定義に平文で残り、コンソール・describe-task-definition・
+      #    Terraform の plan 出力から読めてしまう。secrets なら参照（ARN）しか残らない。
+      secrets = [
+        { name = "ADMIN_PASSWORD", valueFrom = aws_ssm_parameter.admin_password.arn },
       ]
 
       logConfiguration = {
@@ -162,8 +229,19 @@ resource "aws_ecs_service" "app" {
   desired_count   = var.desired_count
   launch_type     = "FARGATE"
 
-  # ALB のターゲット登録が始まる前にリスナーが存在している必要がある
-  depends_on = [aws_lb_listener.http]
+  depends_on = [
+    # ALB のターゲット登録が始まる前にリスナーが存在している必要がある
+    aws_lb_listener.http,
+
+    # ⚠️ 実行ロールの権限は、タスクが起動を試みる前に揃っていなければならない。
+    #    ロールへのポリシー付与はタスク定義からもサービスからも参照されないので、
+    #    明示しないと Terraform は順序を保証しない。
+    #    欠けたまま起動すると ResourceInitializationError（ECR pull / SSM 取得の失敗）になり、
+    #    症状が観点1-6 や assign_public_ip の指定漏れと紛らわしくなる。
+    aws_iam_role_policy_attachment.ecs_execution,
+    aws_iam_role_policy.ecs_execution_secrets,
+    aws_iam_role_policy.ecs_task_dynamodb,
+  ]
 
   network_configuration {
     subnets         = aws_subnet.public[*].id

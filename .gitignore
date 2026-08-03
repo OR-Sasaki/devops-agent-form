@@ -29,6 +29,11 @@ override.tf.json
 Screenshot*.png
 *.screenshot.png
 
+# アプリのビルド成果物。dist/ はイメージの中で作られるもので、リポジトリには要らない。
+# dist-test/ は npm test が吐くテストのビルド先（tsconfig.test.json）。
+dist/
+dist-test/
+
 # ローカル環境
 .DS_Store
 .env

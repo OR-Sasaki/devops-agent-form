@@ -22,6 +22,13 @@ terraform {
       source  = "hashicorp/time"
       version = ">= 0.11.0"
     }
+
+    # /admin の Basic 認証パスワードを生成する（D-035）。
+    # 値をリポジトリに書けない以上、生成元がどこかに要る。
+    random = {
+      source  = "hashicorp/random"
+      version = ">= 3.6.0"
+    }
   }
 
   # backend は backend.tf に分けてある（S3 ＋ use_lockfile = true）。

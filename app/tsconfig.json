@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+
+    // hono/jsx でサーバーサイドレンダリングする。React は入れない。
+    "jsx": "react-jsx",
+    "jsxImportSource": "hono/jsx",
+
+    "rootDir": "src",
+    "outDir": "dist",
+    "sourceMap": true,
+
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    // 型だけの import を import type と書かせる。実行時 import と型 import の
+    // 区別が曖昧だと、ESM のトップレベル副作用（db.ts の SDK クライアント生成）が
+    // 意図しないタイミングで走る。
+    "verbatimModuleSyntax": true,
+
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*"],
+  // テストは tsconfig.test.json 側でビルドする。dist/ に混ぜると
+  // そのままコンテナイメージに入ってしまう。
+  "exclude": ["src/**/*.test.ts"]
+}
