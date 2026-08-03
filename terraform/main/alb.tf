@@ -76,6 +76,24 @@ resource "aws_lb_listener" "http" {
 # 登録と検証発火の切り分けは security-agent.tf のコメントを参照。
 # ⚠️ ローカルから apply しない。apply 経路は CI 1本に保つ（D-009）。
 
+
+# ⚠️ Security Agent が返す route_path には**先頭の / が付かない**（2026-08-03 に実測）。
+#
+#     "routePath": ".well-known/aws/securityagent-domain-verification.json"
+#
+# 一方 ALB の path-pattern は **/ で始まらないと一致しない。**
+# そのまま渡すとルールは作られるが**永久に一致せず**、リクエストはアプリへ流れて 404 になる。
+# plan も apply も通り、**実際に URL を取得するまで発覚しない**種類の誤りである（D-037 と同じ形）。
+#
+# 将来 API が / 付きで返すようになっても壊れないよう、付いていなければ足す形にしてある。
+locals {
+  pentest_route_path = var.register_pentest_target_domain ? (
+    startswith(awscc_securityagent_target_domain.pentest[0].verification_details.http_route.route_path, "/")
+    ? awscc_securityagent_target_domain.pentest[0].verification_details.http_route.route_path
+    : "/${awscc_securityagent_target_domain.pentest[0].verification_details.http_route.route_path}"
+  ) : null
+}
+
 resource "aws_lb_listener_rule" "pentest_verification" {
   count = var.register_pentest_target_domain ? 1 : 0
 
@@ -87,7 +105,7 @@ resource "aws_lb_listener_rule" "pentest_verification" {
 
   condition {
     path_pattern {
-      values = [awscc_securityagent_target_domain.pentest[0].verification_details.http_route.route_path]
+      values = [local.pentest_route_path]
     }
   }
 
