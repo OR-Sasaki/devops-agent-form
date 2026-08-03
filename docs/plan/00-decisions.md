@@ -2,9 +2,10 @@
 
 グリルセッションで確定した決定を、決まった順に記録する。用語は [CONTEXT.md](../../CONTEXT.md) に従う。
 
-**ステータス: 決定確定（D-001〜D-015）／未決事項なし／実装未着手**
+**ステータス: 決定確定（D-001〜D-019）／未決事項なし／Phase 0 は項目6 を除き完了／検証期間は 2026-08-10 頃まで**
 2026-08-02 のグリルセッションで全項目を解消。同日の外部レビューを受けて D-014・D-015 を追加し、[D-002](#d-002-実行基盤は-ecs-fargate--alb--dynamodb) のコスト見積りと [D-008](#d-008-リージョンは-ap-northeast-1-に統一) のリスク認識を訂正した。
-以降に新しい判断が生じたら D-016 以降として追記する。
+同日の [Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) の実機確認で D-016・D-017 を追加し、[D-008](#d-008-リージョンは-ap-northeast-1-に統一) の「3目標すべて東京で成立する」という記述を**再度訂正した**（[D-017](#d-017-目標2-の到達点を-agent-ready-specification-に縮小する) を参照）。
+[Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) 完了時に D-018・D-019 を追加した。以降に新しい判断が生じたら D-020 以降として追記する。
 
 ---
 
@@ -17,21 +18,25 @@
 | 項目 | 事実 |
 |---|---|
 | 提供状況 | GA 済み |
-| 対応リージョン | 11リージョン。us-east-1 / us-west-2 / ca-central-1 / sa-east-1 / ap-south-1 / ap-southeast-1 / ap-southeast-2 / **ap-northeast-1** / eu-central-1 / eu-west-1 / eu-west-2 |
+| 対応リージョン | 11リージョン。us-east-1 / us-west-2 / ca-central-1 / sa-east-1 / ap-south-1 / ap-southeast-1 / ap-southeast-2 / **ap-northeast-1** / eu-central-1 / eu-west-1 / eu-west-2 （[Supported Regions](https://docs.aws.amazon.com/devopsagent/latest/userguide/about-aws-devops-agent-supported-regions.html) を 2026-08-02 に直接再確認。サービスエンドポイントも11個掲載されている） |
 | **機能別のリージョン制限** | 公式に「Feature availability by Region」表がある。**Production operations（investigations / recommendations / prevention）・On-demand DevOps tasks・Custom agents は全リージョン。** **Release management（release readiness review / release testing）は us-east-1 のみ（preview）。** Sandbox（preview）は us-east-1 / us-west-2 / ap-northeast-1 / eu-west-1 |
+| **コード変更の出力形式** | **PR を新規に開くという記述は公式ドキュメントに確認できなかった**（記述が無いだけで、機能が無いことの証明ではない）。確認できた形態は3つ。①Production operations の調査・改善提案は **agent-ready specification**（「a structured document that can be handed directly to a coding agent for implementation」）を生成し、実装は Kiro 等の別エージェントか人間が行う ②Release management の release readiness code review は**既存の PR に対するインラインコメント**（「Findings appear as inline comments on the affected lines of code」）③chat から「Request the agent generate a fix for an identified issue」— **配信形式の記載は無い**。なお GitHub App は Contents を read-write で要求し「propose fixes」と説明されるため、**PR 作成に必要な権限自体は持っている**。判断は [D-017](#d-017-目標2-の到達点を-agent-ready-specification-に縮小する) を参照 |
+| **public リポジトリの制限** | 公式ドキュメントに独立した見出し「Public repository limitation」がある。原文: 「Automated PR/MR code review triggers are only available for private repositories. DevOps Agent does not automatically review pull requests or merge requests on public repositories.」 理由は「anyone can open a pull request against a public repository」。**ただし public でも chat や coding agent 連携（Kiro Power / Claude Code plugin / AWS Transform custom）経由なら release readiness code review 自体は実行できる**（自動発火しないだけ） |
+| GitHub App の権限 | Read & Write（既定）で Checks / Workflows / Actions / Contents / Pull requests が read-write、Organization administration が read。Contents の write は「propose fixes」、Pull requests の write は「posting inline review comments」と説明されている。Read Only も選べる |
 | スコープ | Agent Space はどのリージョンに作っても、紐づけたアカウントの全リージョンを監視できる |
 | 課金 | agent-second 課金。$0.0083 / agent-second。1回の調査（5〜10分）で $2.5〜5 程度 |
 | 無料枠 | 2ヶ月トライアル（Investigations 20h / Evaluations 15h / On-demand SRE 20h） |
 | 前提条件 | ①実際にデプロイされたアプリ ②メトリクス・ログが出ていること（CloudWatch ネイティブで可、追加接続不要） ③Agent 用 IAM ロール |
-| Terraform | **標準の `hashicorp/aws` プロバイダには無い。** `hashicorp/awscc` (≥1.66.0) の `awscc_devopsagent_agent_space` と `awscc_devopsagent_association` を使う |
+| Terraform | **標準の `hashicorp/aws` プロバイダには無い。** `hashicorp/awscc` を使う。リソース名は実在確認済み（下の「awscc プロバイダのスキーマ検証」を参照）。AWS 公式に [Terraform 版の getting started](https://docs.aws.amazon.com/devopsagent/latest/userguide/getting-started-with-aws-devops-agent-getting-started-with-aws-devops-agent-using-terraform.html) と公式サンプル [aws-samples/sample-aws-devops-agent-terraform](https://github.com/aws-samples/sample-aws-devops-agent-terraform)（2026-07-23 更新）がある |
 | 主な連携先 | GitHub（コード＋デプロイイベント）、PagerDuty、Grafana、Azure DevOps、EventBridge |
+| **公式ドキュメント内の矛盾** | [Terraform の getting started ページ](https://docs.aws.amazon.com/devopsagent/latest/userguide/getting-started-with-aws-devops-agent-getting-started-with-aws-devops-agent-using-terraform.html)は「available in the following 6 AWS Regions」と書いているが、[Supported Regions ページ](https://docs.aws.amazon.com/devopsagent/latest/userguide/about-aws-devops-agent-supported-regions.html)は11リージョンを表とエンドポイント一覧の両方で掲げている。**専用ページである後者を採る。** 検索エンジンの要約は前者を拾って「6リージョン」と答えるため、要約を信用してはいけない実例 |
 
 ### AWS Security Agent
 
 | 項目 | 事実 |
 |---|---|
 | 対応リージョン | 9リージョン。**ap-northeast-1 を含む**（GitHub アクセス元 IP の一覧に東京あり） |
-| **自動修復の配信方式** | **リージョンではなくリポジトリ可視性で決まる。** 公式ドキュメント: private リポジトリには修正 PR を出すが、**public リポジトリには PR を出さず、ダウンロード可能な diff を finding に添付する**（修正前に脆弱性を開示しないため）。→ [D-010](#d-010-github-リポジトリは-publicor-sasakidevops-agent-form) で Public を選んだ時点で、**どのリージョンでも修正 PR は出ない**。[D-014](#d-014-security-agent-の自動修復はスコープ外) でスコープ外とした |
+| **自動修復の配信方式** | **リージョンではなくリポジトリ可視性で決まる。** 公式ドキュメント [Remediate code review findings](https://docs.aws.amazon.com/securityagent/latest/userguide/remediate-code-scan-findings.html) を 2026-08-02 に直接再確認。原文: 「For private repositories, AWS Security Agent opens a pull request with the proposed fix. For public repositories, AWS Security Agent attaches a downloadable diff to the finding that you can apply locally.」 同ページに**リージョンに関する記述は一切ない**（当初「us-east-1 限定」と誤認していた点の裏取り）。→ [D-010](#d-010-github-リポジトリは-publicor-sasakidevops-agent-form) で Public を選んだ時点で、**どのリージョンでも修正 PR は出ない**。[D-014](#d-014-security-agent-の自動修復はスコープ外) でスコープ外とした |
 | 課金 | オンデマンドペネトレーションテスト **$50 / task-hour**。2ヶ月の無料トライアルあり |
 | Terraform | `awscc_securityagent_agent_space` あり。AWS 公式サンプル [aws-samples/sample-terraform-for-security-agent](https://github.com/aws-samples/sample-terraform-for-security-agent)（2026-07-03 更新）が `iam.tf` / `security-agent.tf` 等を提供 |
 | 作成されるもの | Application（アカウントに1つ）、`SecurityAgentAppRole-*`（`AWSSecurityAgentWebAppPolicy`）、`SecurityAgentServiceRole-*`（ペンテスト用）、Agent Space、（任意）Target Domain、（任意）Pentest |
@@ -41,7 +46,8 @@
 **GitHub 連携（公式ドキュメントで確認済み）**
 
 - **個人ユーザーアカウントで連携可能。** 登録時の Account type に `Organization` と **`User`** の選択肢がある → `OR-Sasaki` のままで良く、GitHub organization を新設する必要はない
-- **GitHub App は1つの GitHub アカウントに一度しかインストールできない。** つまり `OR-Sasaki` は**ただ1つの AWS アカウント**にしか紐づけられない。デモアカウントに紐づけると、後から別アカウントで使いたくなったらアンインストールが必要
+- **GitHub App は1つの GitHub アカウントに一度しかインストールできない（Security Agent の話。DevOps Agent は違う）。** [Connect to GitHub](https://docs.aws.amazon.com/securityagent/latest/userguide/connect-github.html) に「A GitHub App can only be installed once to a GitHub account or GitHub organization. If you need to connect the same GitHub organization to AWS Security Agent, you must use the same AWS account where the integration was first registered.」とある。つまり `OR-Sasaki` は**ただ1つの AWS アカウント**にしか紐づけられない。デモアカウントに紐づけると、後から別アカウントで使いたくなったらアンインストールが必要
+  → **DevOps Agent には同じ制約は無い。** [What's new](https://docs.aws.amazon.com/devopsagent/latest/userguide/whats-new.html) の 2026-06-30 の項に「You can now connect AWS DevOps Agent in multiple AWS accounts and Regions to the same GitHub organization or account. If the AWS DevOps Agent GitHub App is already installed, additional accounts and Regions reuse the existing installation」とある。**2つのエージェントで制約が違うので、まとめて扱わないこと**
 - リポジトリ選択は **All / Only select repositories** から選べる → **必ず "Only select repositories"** を選ぶこと。All を選ぶと既存の 27 リポジトリすべてが Security Agent のスコープに入る
 
 **ペネトレーションテストのターゲットドメイン検証**
@@ -50,10 +56,78 @@
 - **ALB が対象の場合は HTTP_ROUTE が推奨。** エージェントがパスとトークンを提示し、HTTP で取得して検証する。ALB は元々到達可能なのでそのまま通る
 - → **カスタムドメインは必須ではない。** ALB の生 DNS 名で成立する
 
+### awscc プロバイダのスキーマ検証（Phase 0 項目5）
+
+2026-08-02 に `terraform providers schema -json` を **awscc v1.95.0**（`>= 1.66.0` の制約で解決）に対して実行し、スキーマ本体を直接検査した。リソース総数 1434。
+
+**計画が前提にしていた3つは実在する。**
+
+| リソース名 | 結果 |
+|---|---|
+| `awscc_devopsagent_agent_space` | ✅ 実在 |
+| `awscc_devopsagent_association` | ✅ 実在 |
+| `awscc_securityagent_agent_space` | ✅ 実在 |
+
+→ [Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) の作り直しリスクは消滅した。
+
+**計画に書かれていなかったが実在するリソース**（いずれもスキーマで確認）
+
+`awscc_devopsagent_service` / `awscc_devopsagent_private_connection` / `awscc_securityagent_application` / `awscc_securityagent_pentest` / `awscc_securityagent_target_domain` / `awscc_securityagent_security_requirement_pack`
+
+**スキーマから判明した、計画の記述より細かい事実**
+
+- **`awscc_devopsagent_association` は `service_id` が必須。** AWS アカウントの紐付けでは**リテラル文字列 `"aws"`** を渡す（AWS 公式サンプル `devops-agent.tf` で確認）。`account_type` は `"monitor"`（自アカウント監視）と `"source"`（クロスアカウント）
+- **Agent Space 用と Operator App 用で IAM ロールが2つ要る。** 前者は managed policy `AIDevOpsAgentAccessPolicy` ＋ Resource Explorer のサービスリンクロール作成を許す inline policy、後者は `AIDevOpsOperatorAppAccessPolicy`。信頼するのは `aidevops.amazonaws.com`（Operator App 側は `sts:AssumeRole` に加え `sts:TagSession` も要る）
+- **IAM 伝播待ちが要る。** 公式サンプルは IAM ロール作成と Agent Space 作成の間に `time_sleep` 30秒を挟んでいる。Agent Space 作成時に Operator App ロールの信頼ポリシーが検証されるため、伝播前だと失敗する
+- **`awscc_securityagent_target_domain` は `verification_details` を computed 属性として返す** — `http_route.route_path`（「Route path where verification token should be placed」）と `http_route.token` が Terraform から読める
+- **`awscc_securityagent_agent_space` は GitHub リポジトリ接続を属性として持つ** — `integrated_resources.provider_resources.git_hub_repository{owner,name}` と `git_hub_capabilities{leave_comments, remediate_code}`。`remediate_code` の説明は「Enables creation of pull requests with automated fixes」。加えて `code_review_settings{controls_scanning, general_purpose_scanning}` がある
+- **DevOps Agent 側の GitHub 連携は Terraform で完結しない。** `awscc_devopsagent_service.service_details` には `git_lab` はあるが **`git_hub` が無い**。公式 Terraform ガイドの対応連携一覧も Dynatrace / ServiceNow / Splunk / New Relic / **GitLab** / PagerDuty のみで **GitHub を含まない**。一方 `awscc_devopsagent_association.configuration` には `git_hub{owner, owner_type, repo_id, repo_name}` がある
+  → **未確認**: ブラウザで GitHub App を登録した後に得られる service_id を association に渡せば Terraform 化できるのか、それとも紐付けまでコンソール操作なのか。[Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) の実機で確認する
+
 ### ローカル環境
 
 `terraform 1.13.0` / `aws-cli 2.35.22` / `node v22.19.0` / `npm 11.13.0` / `docker 28.3.3` / `gh 2.90.0` / `git 2.39.5` / `python3 3.13.7`
 pnpm・bun は**無し**。
+
+**AWS 認証情報の実状（2026-08-02 に実測）**
+
+| profile | アカウント | 状態 |
+|---|---|---|
+| `default` | <æ¢å­ã¡ã³ãã¼ A>（`redacted-iam-user`） | **アクセスキーが失効している**（`InvalidClientTokenId`）。使えない |
+| `<å¥ã¢ã«ã¦ã³ãã®ãã­ãã¡ã¤ã«>` | <æ¢å­ã¡ã³ãã¼ B>（`user/developer`） | 有効。メンバーアカウントなので `DescribeOrganization` は通るが `CreateAccount` 等の管理アカウント専用 API は届かない |
+| `devopsagent` | 308513050613（デモアカウント） | [D-016](#d-016-デモアカウントへは-aws-login-で直接入る管理アカウントは経由しない) で新設。`aws login` 済み（`arn:aws:iam::308513050613:root`）。`aws configure list` の TYPE が `login` であることを確認済み |
+| `devopsagent-tf` | 同上 | Terraform 用。`credential_process` で `devopsagent` から認証情報を受け取る。**S3 バックエンドを使うときはこちら**（下記参照） |
+
+**`aws login` と Terraform の相性（一次ソースで確認済み）**
+
+- `aws login` は aws-cli **2.32.0 以降**の機能。短期認証情報とリフレッシュトークンを `~/.aws/login/cache` に置き、最大12時間まで自動更新する。長期アクセスキーもルート認証情報もローカルに残らない
+- **共有認証情報ファイル（`~/.aws/credentials`）の静的キーは login 認証情報より優先される。** 公式トラブルシューティングに明記。`default` に失効キーが残っているため、**login には別プロファイル名を使う必要がある**
+- **Terraform AWS プロバイダは `aws login` に対応している** — 2026-08-03 に**実測**。`AWS_PROFILE=devopsagent terraform apply` が通り `aws_caller_identity` が `308513050613` を返した（hashicorp/terraform-provider-aws#45316 でメンテナが 6.23.0 以降での動作を確認しているのと一致）
+- **S3 バックエンドは対応していない** — 2026-08-03 に**実測で再現**。同じプロファイルで `backend "s3"` を書くと `terraform init` が落ちる。
+
+  ```
+  Error: No valid credential sources found
+  Error: failed to refresh cached credentials, no EC2 IMDS role found,
+  operation error ec2imds: GetMetadata, request canceled, context deadline exceeded
+  ```
+
+  S3 バックエンドは `terraform` バイナリに組み込まれておりプロバイダとは別物であるため。hashicorp/terraform#37976 で追跡され 2026-01-20 に close されたが、**ローカルの Terraform 1.13.0 では未解決**（報告は 1.14.1 に対するもので、それより古い 1.13.0 が直っている道理は無い）
+- **回避策 `credential_process` は有効。これも実測で確認した** — AWS 公式が案内する方式。設定後に `terraform init` と `apply` が通り、**state が S3 に書き込まれるところまで確認済み**
+
+**⚠️ `credential_process` には絶対パスが必要（この環境固有の落とし穴）**
+
+`/usr/local/bin/aws` は **macOS 上に置かれた Linux 用 ELF バイナリ**（`ELF 64-bit LSB executable, x86-64 ... for GNU/Linux`）で、**実行できない**。実際に動いているのは Homebrew 版の `/opt/homebrew/bin/aws`（aws-cli 2.35.22）。
+
+`credential_process` は `sh` 経由で実行されるため、コマンド名を `aws` と書くと壊れた方に当たる。
+
+```
+sh: /usr/local/bin/aws: cannot execute binary file
+Error: failed to refresh cached credentials, process provider error:
+error in credential_process: exit status 126
+```
+
+→ **`credential_process` には `/opt/homebrew/bin/aws` と絶対パスで書く。** [D-016](#d-016-デモアカウントへは-aws-login-で直接入る管理アカウントは経由しない) の設定例はこの形になっている。
+なおこの壊れたバイナリは `aws` を `sh` や `env` 経由で起動する**あらゆるツールを壊しうる**ので、いずれ削除しておくのが望ましい。
 
 ### DevOps Agent と Security Agent の役割分担
 
@@ -68,12 +142,125 @@ AWS のフロンティアエージェントは2つあり、守備範囲が分か
 
 ### AWS Organizations
 
+2026-08-02 に `aws organizations describe-organization` を `<å¥ã¢ã«ã¦ã³ãã®ãã­ãã¡ã¤ã«>` プロファイルから実行して再確認した（メンバーアカウントからでも組織の基本情報は読める）。
+
 | 項目 | 値 |
 |---|---|
 | 組織 ID | `o-xxxxxxxxxx` |
 | 管理アカウント | **<ç®¡çã¢ã«ã¦ã³ã ID>**（`<ç®¡çã¢ã«ã¦ã³ãã®ã¡ã¼ã«ã¢ãã¬ã¹>`） |
+| FeatureSet | `ALL` |
 | 既存メンバー | <æ¢å­ã¡ã³ãã¼ A>（`redacted-iam-user`）、<æ¢å­ã¡ã³ãã¼ B>（`developer`） |
+| **デモアカウント** | **308513050613** — [D-003](#d-003-専用の新規-aws-アカウントを発行する) の専用アカウント。**発行済み** |
 | SCP | **ENABLED** — 新アカウントは OU/ルートの SCP を継承する |
+
+### Phase 0 の実機確認結果（デモアカウント 308513050613）
+
+2026-08-03 に `aws login` したセッションから実際に API を叩いて確認した。すべて実測値であり、推測は含まない。
+
+**アカウントの状態** — Phase 0 の確認時点では S3 バケット 0 / ECS クラスタ 0 / DynamoDB テーブル 0 / ALB 0 / Agent Space 0（DevOps・Security とも）。
+[D-003](#d-003-専用の新規-aws-アカウントを発行する) の「既存リソースがゼロ」という前提は成立していた。
+
+> **その後 2026-08-03 に Security Agent をコンソールから有効化したため、現在はゼロではない。** 下の「Security Agent の実状」を参照。
+
+**ルートユーザーの MFA** — 有効（`iam:GetAccountSummary` の `AccountMFAEnabled = 1`）。[D-018](#d-018-terraform-はルートユーザーのまま回す) が要求していた条件を満たしている。
+
+**Security Agent の実状（2026-08-03 にコンソールで有効化）**
+
+| 項目 | 値 |
+|---|---|
+| Application | `app-966a2407-â¦`（名前 `SecurityAgent`） |
+| Agent Space | `as-d363b56d-â¦`（名前 **`SandboxAgent`**）、`ap-northeast-1`、作成 2026-08-03T04:52:20Z |
+| Target Domain | 未登録（`targetDomainIds: []`） |
+| ウェブアプリ URL | `app-966a2407-....securityagent.global.app.aws` |
+
+**コンソール上の各機能の状態**（スクリーンショットで確認）
+
+| 機能 | 状態 |
+|---|---|
+| ペネトレーションテスト | セットアップが必要 |
+| 設計レビュー **（プレビュー）** | 準備完了 |
+| 脅威モデル **（プレビュー）** | セットアップが必要 |
+| コードレビュー **（プレビュー）** | セットアップが必要 |
+
+> **コードレビューは preview 扱いである。** [D-006](#d-006-security-agent-も併せて導入する) と [Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) の項目10（PR にコードレビューコメントが付くこと）はこの機能に依存する。GA ではないため挙動が変わりうる。
+
+**ウェブアプリへのユーザーアクセスは IAM Identity Center が管理する** — コンソールに「ウェブアプリへのユーザーアクセスは、IAM アイデンティティセンターによって管理されます」と表示される。
+ただし**管理者アクセスは IdC のユーザー割り当てなしで利用できる**（同画面の「管理者アクセス」ボタン）ため、[D-016](#d-016-デモアカウントへは-aws-login-で直接入る管理アカウントは経由しない) で IdC を却下した判断は覆らない。運用者を増やしたくなったときだけ IdC が必要になる。
+
+**SCP による制限（項目3）— 弾かれていない**
+
+判定方法の妥当性は公式ドキュメント [Service control policies](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps.html) で裏を取った。原文: 「SCPs affect all users and roles in attached accounts, **including the root user**」「An SCP restricts permissions for IAM users and roles in member accounts, **including the member account's root user**」。
+例外リスト（管理アカウントの操作・サービスリンクロール・Enterprise サポート登録・CloudFront trusted signer・Lightsail/EC2 の逆引き DNS・Alexa/Mechanical Turk 等）に本プロジェクトのサービスは含まれない。
+→ **メンバーアカウントの root で実効権限を見れば SCP の影響を判定できる。** かつ root は IAM ポリシーによる制限を受けないため、`AccessDenied` が返ればそれは SCP 由来と考えてよい。
+
+**読み取り系**
+
+| API | 結果 |
+|---|---|
+| `ecs:ListClusters` | ✅ |
+| `elasticloadbalancing:DescribeLoadBalancers` | ✅ |
+| `dynamodb:ListTables` | ✅ |
+| `aidevops`（`devops-agent list-agent-spaces` / `list-services`） | ✅ |
+| `securityagent`（`securityagent list-agent-spaces`） | ✅ |
+| `ec2:DescribeVpcs` / `iam:ListRoles` / `s3:ListBuckets` / `ecr:DescribeRepositories` / `logs:DescribeLogGroups` / `cloudtrail:DescribeTrails` / `servicequotas:ListServices` | ✅ |
+
+**作成系 — 読み取りの結果からは推論できないので、個別に測った**
+
+> **外部レビューでの指摘を受けて追加した。** 以前この節は「S3 の作成・削除が通ったから書き込みも通る」と書いていたが、
+> **SCP は Action 単位で拒否できる**ため、`ecs:ListClusters` を許可しつつ `ecs:CreateCluster` を拒否する SCP は成立しうる。
+> S3 の成功を他サービスに一般化するのは誤りだった。以下は各アクションを実際に叩いた結果である。
+
+| 検証方法 | API | 結果 |
+|---|---|---|
+| **実際に作成 → 削除** | `ecs:CreateCluster` | ✅ 成功 |
+| **実際に作成 → 削除** | `dynamodb:CreateTable` | ✅ 成功 |
+| **実際に作成 → 削除** | `ecr:CreateRepository` | ✅ 成功 |
+| **実際に作成 → 削除** | `iam:CreateRole` | ✅ 成功 |
+| **実際に作成 → 削除** | `logs:CreateLogGroup` | ✅ 成功 |
+| **実際に作成 → 削除** | `s3:CreateBucket` ＋ Terraform apply（state 書き込み） | ✅ 成功 |
+| **実際に作成 → 削除** | `awscc_logs_log_group`（awscc プロバイダ経由） | ✅ 成功 |
+| 無効パラメータで認可のみ | `elasticloadbalancing:CreateLoadBalancer` | ✅ 認可通過（パラメータ検証で停止） |
+| 無効パラメータで認可のみ | `aidevops:CreateAgentSpace` | ✅ 認可通過 |
+| 無効パラメータで認可のみ | `securityagent:CreateTargetDomain` | ✅ 認可通過 |
+| 無効パラメータで認可のみ | `cloudtrail:CreateTrail` | ✅ 認可通過（`S3BucketDoesNotExistException` まで到達） |
+| 無効パラメータで認可のみ | `budgets:CreateBudget` | ✅ 認可通過 |
+| 無効パラメータで認可のみ | `ec2:CreateVpc` | ✅ 認可通過 |
+
+**「無効パラメータで認可のみ」の判定基準** — SCP による拒否は `AccessDeniedException` として返る。
+`ValidationException` 等のパラメータエラーが返るということは、**認可を通過してパラメータ検証まで進んだ**ということ。
+ただし**サービスによっては認可より先にパラメータを検証する**可能性があるため、この方法の証拠力は「実際に作成」より弱い。
+`AccessDenied` が返らなかったことは確実だが、それを「確実に許可されている」と読むのは行き過ぎである。
+
+**作成したリソースはすべて削除済み**で、アカウントは空の状態に戻してある。
+
+**唯一弾かれた API** — `devops-agent get-account-usage` が `AccessDeniedException: Access denied`（ap-northeast-1 / us-east-1 の両方）。
+同じ `aidevops` 名前空間の `list-agent-spaces` と `list-services` は通るため、**名前空間まるごとを denyする SCP ではない。** 原因は未特定（下記「未確認」を参照）。
+
+**クォータ（項目4）— 足りている**
+
+| クォータ | 値 | 必要量 |
+|---|---|---|
+| **Fargate On-Demand vCPU resource count** | **6** | **0.5**（0.25 vCPU × desired 2、[D-013](#d-013-委任された技術判断こちらで決定)） |
+| Fargate Spot vCPU resource count | 6 | 未使用 |
+| Fargate On-Demand Burst Launch Rate | 100 | — |
+| Application Load Balancers per Region | 50 | 1 |
+
+**コストデータの可視性（項目7）— 見える**
+
+`ce:GetCostAndUsage` をデモアカウントから実行し、正常なレスポンス（`ResultsByTime` / `Estimated: true`）が返った。金額は $0 だが、これは**アカウントが新品で支出が無いため**であり、API 自体は機能している。
+権限が無ければ `AccessDeniedException` が返るはずなので、**Cost Explorer のリンクアカウントアクセスは有効**と判断してよい。
+→ ただし「実際に課金が発生したときに金額が乗ってくるか」は支出ゼロの現時点では確かめようがない。**[Phase 1](./02-implementation-plan.md#phase-1-ブートストラップ--最小-ci) 以降に再確認する。**
+
+**Security Agent の無料トライアル残枠（項目6）— 🚧 未確認のまま**
+
+CLI からは取得できなかった。試したもの:
+
+- `aws devops-agent get-account-usage` → `AccessDeniedException`
+- `aws securityagent` に使用量・トライアル系の API が**存在しない**（`create-membership` / `list-memberships` はあるが用途が異なる）
+- `aws freetier get-free-tier-usage` → `{"freeTierUsages": []}`（空）
+
+→ **コンソールで確認するしかない可能性が高い。** [Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) はペンテスト実行直前の再確認を要求しており、そこで必ず見ることになる。
+**ペンテストは $50/task-hour で予算上限 $100（[D-015](#d-015-予算上限は月-100通知は管理アカウントのメールへ)）の半分を1回で消費しうるため、残枠が読めないまま実行してはいけない。**
 
 ### GitHub
 
@@ -87,6 +274,7 @@ AWS のフロンティアエージェントは2つあり、守備範囲が分か
 
 1. **壊して根本原因を突き止めさせる** — アラームを発火させ、Agent にインシデント調査・RCA をさせる
 2. **コードのバグを PR で修正させる** — GitHub 連携し、コード起因の不具合を Agent に直させる
+   → **[D-017](#d-017-目標2-の到達点を-agent-ready-specification-に縮小する) で到達点を「agent-ready specification の生成」に縮小した。** DevOps Agent は PR を作らないことが確認されたため
 3. **CI/CD パイプラインの失敗を調査させる** — GitHub Actions の失敗を Agent にトラブルシュートさせる
 
 **帰結** — 「動くアプリ＋観測可能性＋GitHub 連携＋CI/CD」を一通り揃える必要がある。単なるフォームページでは成立しない。
@@ -146,12 +334,25 @@ ALB の LCU、CloudWatch Logs、Container Insights、CloudTrail の保存料は�
 これは [Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) に残る（[D-013](#d-013-委任された技術判断こちらで決定) でも同じ点に触れている）。
 「手作業はアカウント発行のみ」は **AWS 側について**の話であり、GitHub 側までは含まない。
 
-**入り方** — Organizations 経由で作ったメンバーアカウントには `OrganizationAccountAccessRole`（AdministratorAccess）が**自動生成される**。Terraform は管理アカウントの認証情報からこのロールを assume して入る。
+**例外（AWS 側に残る手作業）— 2026-08-03 に1つ増えた**
+
+| 手作業 | 理由 |
+|---|---|
+| デモアカウントの `CreateAccount` | 当初からの唯一の手作業 |
+| `aws login` でのサインイン | [D-016](#d-016-デモアカウントへは-aws-login-で直接入る管理アカウントは経由しない)。ブラウザ認証が前提の仕組みで、そもそも自動化する対象ではない |
+| **Security Agent の Application 有効化** | [D-019](#d-019-先行作成した-agent-space-は削除しterraform-に作り直させる)。アカウントに1つの一度きりの有効化。Terraform で `resource` として書くと既存と重複して apply が落ちる |
+
+いずれも**アカウント単位で一度きり**であり、「以降すべて Terraform」という趣旨自体は保たれている。
+
+**入り方** — ~~Organizations 経由で作ったメンバーアカウントには `OrganizationAccountAccessRole`（AdministratorAccess）が自動生成される。Terraform は管理アカウントの認証情報からこのロールを assume して入る。~~
+→ **[D-016](#d-016-デモアカウントへは-aws-login-で直接入る管理アカウントは経由しない) で置き換えた。** 管理アカウントの認証情報がそもそもローカルに無く、この前提が成立しなかった。`aws login` でデモアカウントへ直接入る方式に変更している。
 
 **帰結**
 - **ルート認証情報を触らない**
 - **長期アクセスキーを手で発行・保管しない**
 - アカウント ID を変数化しておけば、アカウントごと作り直しても再現できる
+
+**この帰結は [D-016](#d-016-デモアカウントへは-aws-login-で直接入る管理アカウントは経由しない) でも保たれる。** `aws login` は短期認証情報とリフレッシュトークンしかローカルに置かず、長期アクセスキーを発行しない。むしろ assume 元として管理アカウントの強い認証情報を手元に置く必要が消えた分、この決定の精神により忠実になった。
 
 **却下**
 - **IAM ユーザー＋アクセスキーを手動発行** — Terraform 側は単純になるが、長期認証情報が手元に残る
@@ -193,7 +394,7 @@ ALB の LCU、CloudWatch Logs、Container Insights、CloudTrail の保存料は�
 - ペネトレーションテストは **$50/task-hour** と高額 → 無料トライアル枠内で回す前提にする
 - アプリは「脆弱性を仕込める構造」を持つ必要がある（入力をそのまま表示する経路など）
 
-**注意** — GitHub App は `OR-Sasaki` に一度しかインストールできず、紐づけ先はデモアカウント1つに固定される。リポジトリ選択では必ず **"Only select repositories"** を選び、既存 27 リポジトリを巻き込まないこと。
+**注意** — **Security Agent の** GitHub App は `OR-Sasaki` に一度しかインストールできず、紐づけ先はデモアカウント1つに固定される（DevOps Agent はこの制約を受けない。[調査済みの外部事実](#aws-security-agent) を参照）。リポジトリ選択では必ず **"Only select repositories"** を選び、既存 27 リポジトリを巻き込まないこと。
 
 ---
 
@@ -224,8 +425,15 @@ ALB の LCU、CloudWatch Logs、Container Insights、CloudTrail の保存料は�
 
 **残る唯一のリージョン制限** — DevOps Agent の **Release management（release readiness review / release testing）が us-east-1 のみ（preview）**。
 
-ただし [D-001](#d-001-デモの到達目標を3つとも狙う) の3目標（RCA・コードバグの修正・CI/CD 失敗の調査）は、いずれも**全リージョン提供の Production operations と On-demand DevOps tasks に属する**ため、**東京で全て成立する。**
-Release management は今回のスコープに入っていない。将来これを試したくなったときだけ、us-east-1 に Agent Space を追加する。
+**「3目標すべて東京で成立する」という記述は誤りだった（2026-08-02 の Phase 0 で再訂正）** — 以前この項には次のように書いていた。
+
+> ただし D-001 の3目標（RCA・コードバグの修正・CI/CD 失敗の調査）は、いずれも全リージョン提供の Production operations と On-demand DevOps tasks に属するため、東京で全て成立する。
+
+**目標2 についてこれは成り立たない。** 公式ドキュメントを直接読んだ結果、DevOps Agent が **PR を作成するという記述はそもそも存在せず**、PR に触れる機能（release readiness code review のインラインコメント）は **Release management すなわち us-east-1 限定**だった。詳細と対応は [D-017](#d-017-目標2-の到達点を-agent-ready-specification-に縮小する) に記す。
+
+**目標1（RCA）と目標3（CI/CD 失敗の調査）は Production operations と On-demand DevOps tasks に属するため、東京で成立する。** ここは変わらない。
+
+**この決定は維持する。** [D-017](#d-017-目標2-の到達点を-agent-ready-specification-に縮小する) で目標2 の到達点を Production operations の範囲内に収めたため、us-east-1 に Agent Space を追加する動機は無い。将来 Release management を試したくなったときだけ検討する。
 
 ---
 
@@ -275,7 +483,19 @@ Security Agent のペネトレーションテストは検証済みドメイン�
 
 キャンペーン型なら期間中は DNS 名が固定されるので、**検証は1回で済む**。
 
-**コスト** — 2週間で **約 $26**（[D-002](#d-002-実行基盤は-ecs-fargate--alb--dynamodb) の月額 $55 ベース）。DevOps Agent / Security Agent の無料トライアル枠（各2ヶ月）の中で十分に回せる。
+**検証期間が具体化した（2026-08-03）** — **1週間以内に全て削除する**方針が決まった。
+
+> **起点の解釈に注意。** 「1週間以内」とだけ合意されており、起点が「この方針を決めた 2026-08-03」なのか
+> 「インフラを立ち上げた日」なのかは明示されていない。ここでは**前者（2026-08-03 起点、〜08-10 頃）**と解釈している。
+> Phase 1〜4 の構築に数日かかるため、**実際にインフラが稼働している期間はこれより短くなる。**
+> コスト見積りは安全側（1週間フル稼働）で置いてある。
+
+**コスト** — **1週間で約 $13**（[D-002](#d-002-実行基盤は-ecs-fargate--alb--dynamodb) の月額 $55 ベース。2週間なら約 $26）。
+
+**無料トライアルの期間は制約にならない** — DevOps Agent / Security Agent とも2ヶ月あり、1週間の検証期間はその内側に完全に収まる。Security Agent の Application を 2026-08-03 に有効化したことで起算が始まっていても影響しない。
+
+> **ただし「期間」と「残枠」は別物である。**
+> ペネトレーションテストは **$50/task-hour** で、残枠を使い切っていれば期間内でも課金される。[Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) の実行直前の残枠確認は**引き続き必要**（[D-015](#d-015-予算上限は月-100通知は管理アカウントのメールへ)）。
 
 **露出** — 脆弱なエンドポイントの公開期間が検証期間に限定される。[D-010](#d-010-github-リポジトリは-publicor-sasakidevops-agent-form) の緩和策4を満たす。
 
@@ -352,6 +572,183 @@ Security Agent のペネトレーションテストは検証済みドメイン�
 
 ---
 
+## D-016: デモアカウントへは `aws login` で直接入る（管理アカウントは経由しない）
+
+**決定** — [デモアカウント](../../CONTEXT.md#デモアカウント-demo-account) **308513050613** へは `aws login --remote` で直接サインインする。**管理アカウント <ç®¡çã¢ã«ã¦ã³ã ID> の認証情報はローカルに一切置かない。**
+
+**経緯** — [D-004](#d-004-手作業はアカウント発行のみ以降すべて-terraform) は「管理アカウントの認証情報から `OrganizationAccountAccessRole` を assume して入る」と書いていたが、**その管理アカウントへ入る手段が計画に書かれておらず、実際にローカルにも無かった。**
+[Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) 着手時に判明した実状は次の通り。
+
+- `default`（<æ¢å­ã¡ã³ãã¼ A>）は**アクセスキーが失効済み**で使えない
+- `<å¥ã¢ã«ã¦ã³ãã®ãã­ãã¡ã¤ã«>`（<æ¢å­ã¡ã³ãã¼ B>）は有効だがメンバーアカウントであり、`CreateAccount` 等の管理アカウント専用 API には届かない
+- したがって「既存アカウントから管理アカウントへ assume する」という逃げ道も塞がっていた
+
+**やり方**
+
+```
+aws login --remote --profile devopsagent
+```
+
+- **`default` を使ってはいけない。** `~/.aws/credentials` の静的キーは login 認証情報より優先されるため（AWS 公式トラブルシューティングに明記）、失効キーが残っている `default` では認証が通らない。専用プロファイル名を使う
+- リージョンは `ap-northeast-1` を事前設定済み（[D-008](#d-008-リージョンは-ap-northeast-1-に統一)）
+- セッションは最大12時間。切れたら `aws login` をやり直す
+- IAM ユーザーでサインインする場合は managed policy `SignInLocalDevelopmentAccess` が要る。ルートでサインインする場合は追加権限は不要
+
+**Terraform から使うための追加設定（S3 バックエンド対策）**
+
+Terraform AWS プロバイダは 6.23.0 以降で `aws login` に対応済みだが、**S3 バックエンドは未対応**（`terraform` バイナリ組み込みでプロバイダとは別物。ローカルの Terraform 1.13.0 は影響を受ける）。AWS 公式が案内する `credential_process` を橋渡しに使う。
+
+```ini
+[profile devopsagent]
+login_session = arn:aws:iam::308513050613:root   # aws login が自動で書く
+region        = ap-northeast-1
+output        = json
+
+[profile devopsagent-tf]
+credential_process = /opt/homebrew/bin/aws configure export-credentials --profile devopsagent --format process
+region             = ap-northeast-1
+output             = json
+```
+
+**`credential_process` は絶対パスで書くこと。** `aws` とだけ書くと `sh` が壊れた `/usr/local/bin/aws`（macOS 上の Linux ELF バイナリ）に当たって `exit status 126` になる。詳細は[ローカル環境](#ローカル環境)を参照。
+
+Terraform 側は `devopsagent-tf` を使う。これで **S3 バックエンドを使う `terraform/main/` をローカルから plan できる**（[Phase 2](./02-implementation-plan.md#phase-2-インフラ本体を書く) の完了条件）。
+
+**2026-08-03 に実測で検証済み** — ①`aws login` 直後の `aws configure list` で TYPE が `login` になること ②プロバイダのみなら `devopsagent` で apply が通ること ③S3 バックエンドを足すと `devopsagent` では `No valid credential sources found` で落ちること ④`devopsagent-tf` に切り替えると init・apply が通り state が S3 に書かれること、の4点をすべて確認した。
+
+**帰結**
+
+- **[D-004](#d-004-手作業はアカウント発行のみ以降すべて-terraform) の帰結は保たれる。** ルート認証情報を保管せず、長期アクセスキーも発行しない。管理アカウントの強権限を手元に置かなくなった分、むしろ D-004 の精神に忠実になった
+- **`OrganizationAccountAccessRole` を assume しない。** [Phase 1](./02-implementation-plan.md#phase-1-ブートストラップ--最小-ci) の `bootstrap/providers.tf` から `assume_role` ブロックが消え、プロファイル指定だけになる
+- **管理アカウントでしかできない確認は Phase 0 の範囲外になる。** 具体的には配置先 OU の SCP 内容の読み取り（`organizations:DescribePolicy` 等）と、Cost Explorer のリンクアカウントアクセス設定。**これらはデモアカウント側から実効性で確認する**（[Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) の項目3・7 を参照）
+- 12時間でセッションが切れるため、長時間の作業では再ログインが要る。CI は OIDC なので影響しない（[D-009](#d-009-アプリも-terraform-も-ci-から-apply-する完全-gitops)）
+
+**却下**
+
+- **管理アカウントに IAM ユーザー＋アクセスキーを作る** — 最短だが、組織ルートの管理者相当の長期キーがローカルに残る。爆発半径が組織全体（既存2アカウント含む）に広がり、[D-004](#d-004-手作業はアカウント発行のみ以降すべて-terraform) に真っ向から反する
+- **管理アカウントに `<å¥ã¢ã«ã¦ã³ãã®ãã­ãã¡ã¤ã«>` から assume できるロールを作る** — 新規の長期キーは増えないが、本プロジェクトと無関係な既存アカウントの長期キーが組織全体への入口になる。[D-003](#d-003-専用の新規-aws-アカウントを発行する)「専用アカウントで爆発半径を閉じる」と逆行する
+- **IAM Identity Center を有効化する** — 短期認証情報という点では同等で、権限セットを複数アカウントへ配れる利点もあるが、サンドボックス1つのために組織全体の認証基盤を導入するのは重い。`aws login` で同じ性質（長期キー無し・自動更新）が得られる
+
+---
+
+## D-017: 目標2 の到達点を agent-ready specification に縮小する
+
+**決定** — [D-001](#d-001-デモの到達目標を3つとも狙う) の目標2「コードのバグを PR で修正させる」の期待動作を、**「調査 → 根本原因特定 → agent-ready specification の生成」まで**に縮小する。実際のコード修正は人間または別のコーディングエージェントが行う。
+
+**理由（公式ドキュメントを直接読んで確認した事実）** — **DevOps Agent が PR を新規に開くという記述を、公式ドキュメントのどこにも確認できなかった。**
+
+> **これは「PR 作成機能が存在しない」という証明ではない。** 記述が無いことを機能が無いことの証明として扱わない、という区別をここで明示しておく。
+> 確認できたのは「**受け入れ基準に据えられるだけの裏付けが取れない**」ことであり、D-017 はその事実に基づいて期待値を下げる決定である。
+
+**確認できた出力形態**
+
+1. **agent-ready specification** — Production operations の改善提案が生成する構造化文書。問題文・解決方針・対象リポジトリ・変更内容・テスト要件・実装計画を含み、「a structured document that can be handed directly to a coding agent for implementation」と説明される。**PR ではない**
+2. **release readiness code review のインラインコメント** — 「Findings appear as inline comments on the affected lines of code」。**既存の PR に対するコメントであって、PR を開く動作ではない**
+3. **chat からの fix 生成** — release readiness code review のページに「Request the agent generate a fix for an identified issue」とある。**生成された fix がどう配信されるか（PR か、チャット上の差分提示か）は記載が無い**
+
+**「PR を作らない」と断定できない根拠（外部レビューでの指摘を受けて追記）**
+
+- GitHub App は **Contents を read-write** で要求し、その用途を「Write access enables the agent to **propose fixes** for identified issues」と説明している。**PR 作成に必要な権限自体は持っている**
+- 上記3の fix 生成機能がある
+
+**それでもなお PR 作成を受け入れ基準にしない理由**
+
+- [What's new](https://docs.aws.amazon.com/devopsagent/latest/userguide/whats-new.html) の全変更履歴（2026年5〜7月）を確認したが、**PR に関する項目はすべて「PR *に対する*レビュー」**であり、PR を開く機能の追加は無い
+- 対照的に、Security Agent 側は「AWS Security Agent **opens a pull request** with the proposed fix」と**明示的に書かれている**。同じ AWS のドキュメント群で、書くべきときには書かれている
+- → **確認できない機能を到達目標に据えると、達成/未達の判定ができない。**
+
+**未確認として [Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) に残す** — GitHub を Read & Write で接続した後、chat から fix 生成を実際に試し、**何が返るかを観測する**。
+PR が返るなら望外の収穫であり、そのとき目標2 を戻せばよい。
+
+さらに 2 には制約が二重にかかる。
+
+- **リージョン** — release readiness code review は Release management に属し、**us-east-1 のみ（preview）**（[D-008](#d-008-リージョンは-ap-northeast-1-に統一)）
+- **リポジトリ可視性** — 公式ドキュメントに独立した見出し「Public repository limitation」があり、「Automated PR/MR code review triggers are only available for private repositories」と明記。[D-010](#d-010-github-リポジトリは-publicor-sasakidevops-agent-form) の Public 選択と衝突する
+
+つまり目標2 を字義通り実現するには **[D-008](#d-008-リージョンは-ap-northeast-1-に統一)（単一リージョン）と [D-010](#d-010-github-リポジトリは-publicor-sasakidevops-agent-form)（Public）の両方を覆す**必要があり、それでもなお「PR を開く」動作は得られない。
+
+**帰結**
+
+- **構成変更はゼロ。** 東京単一リージョン・Public リポジトリ・現在のコスト見積りをすべて維持できる
+- [01-fault-perspectives.md](./01-fault-perspectives.md) 観点2 の「担当は DevOps Agent（RCA → 原因コミット特定 → 修正 PR）」から**「修正 PR」を削除する**
+- [Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) の受け入れ基準は変わらない。項目7（アラーム → ログ → コミットの相関）が目標2 の前提であることに変わりはなく、そこから先が spec 生成になるだけ
+- **PR を作る主体は Security Agent だけになる。** ただし [D-014](#d-014-security-agent-の自動修復はスコープ外) で Public のためスコープ外としているので、**本プロジェクトで PR を自動生成するエージェントは存在しない**ことになる
+
+**[D-014](#d-014-security-agent-の自動修復はスコープ外) と同じ扱いである。** 「エージェントの能力を過大に見積もった期待値を、確認できた事実に合わせて下げる」という同一パターンの2件目。
+
+**却下**
+
+- **リポジトリを Private にする（[D-010](#d-010-github-リポジトリは-publicor-sasakidevops-agent-form) 撤回）** — Security Agent の修正 PR は復活し（[D-014](#d-014-security-agent-の自動修復はスコープ外) も撤回）、DevOps Agent の PR 自動レビューも発火対象になる。しかし DevOps Agent 側は依然 us-east-1 の Agent Space が別途必要で、Public 前提で組んだ判断（露出管理・警告 README・Push Protection 対処）まで巻き戻る
+- **Public のまま us-east-1 に2つ目の Agent Space を追加する** — 公式ドキュメントは「public でも chat や coding agent 連携経由なら release readiness code review を実行できる」としているので手動では回せる。だが [D-008](#d-008-リージョンは-ap-northeast-1-に統一) の単一リージョン方針が崩れ、得られるのは結局「PR へのコメント」であって PR ではない
+- **判断を Phase 5 まで保留する** — 実機で覆る性質の制約ではない（公式ドキュメントに明記された仕様であり、設定で変わらない）。保留しても情報は増えない
+
+---
+
+## D-018: Terraform はルートユーザーのまま回す
+
+**決定** — [デモアカウント](../../CONTEXT.md#デモアカウント-demo-account) 308513050613 には `aws login` でルートユーザーとしてサインインし、**そのまま Terraform を回す**。IAM ユーザーは作らない。
+
+**経緯** — [D-016](#d-016-デモアカウントへは-aws-login-で直接入る管理アカウントは経由しない) の `aws login` でサインインしたのがルート（`arn:aws:iam::308513050613:root`）だった。新規メンバーアカウントには IAM ユーザーが1つも無いため、**初回にルートで入る以外の選択肢が無かった**。
+[D-004](#d-004-手作業はアカウント発行のみ以降すべて-terraform) の「ルート認証情報を触らない」との折り合いを [Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) の完了時に検討し、このまま進めることにした。
+
+**[D-004](#d-004-手作業はアカウント発行のみ以降すべて-terraform) の「ルート認証情報を触らない」の解釈を、ここで明示的に確定する。**
+
+> **意味するのは「ルートの長期アクセスキーを作らない・保管しない」であって、「ルートで作業しない」ではない。**
+
+`aws login` はコンソールセッション由来の短期認証情報とリフレッシュトークンしか置かないため、**この解釈のもとで D-004 は破られていない。** [D-004](#d-004-手作業はアカウント発行のみ以降すべて-terraform) が却下した「IAM ユーザー＋アクセスキーを手動発行」の核心は長期認証情報が手元に残ることであり、そこは回避できている。
+
+**理由**
+
+- **爆発半径が閉じている。** [D-003](#d-003-専用の新規-aws-アカウントを発行する) で専用アカウントにしたため、ルート権限で壊せる範囲は本プロジェクトのリソースだけ。既存2アカウントには一切届かない
+- IAM ユーザーを作る手間と、サンドボックスで得られる安全性の差が釣り合わない
+- セッションは**最大12時間で自動失効**する。`aws logout` で明示的に破棄もできる
+
+**引き受けたリスク**
+
+- **ルートは IAM ポリシーで制限できない。** 誤操作に対するガードレールが実質 SCP だけになる（[Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) の項目3 で確認したとおり、現状の SCP は何も制限していない）
+- AWS の一般的な推奨（ルートは必要な操作に限る）には反する
+- アカウントの安全性がコンソールのパスワードと MFA に直結する。→ **2026-08-03 に MFA を有効化済み**（`AccountMFAEnabled = 1` で確認）。この決定の前提条件は満たされている
+
+**却下** — **IAM ユーザーを作り、コンソールパスワードのみ設定して `aws login` し直す**（`AdministratorAccess` ＋ `SignInLocalDevelopmentAccess`）。長期アクセスキーを出さずにルート常用を避けられる正攻法だが、専用サンドボックスに対しては過剰と判断した。方針を変えたくなったらこの案に戻せる（`aws login --profile devopsagent` をやり直すだけで切り替わる）。
+
+---
+
+## D-019: 先行作成した Agent Space は削除し、Terraform に作り直させる
+
+**決定** — 2026-08-03 にコンソールから先行作成した Security Agent の Agent Space **`SandboxAgent`**（`as-d363b56d-…`）を**削除し**、[Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) で Terraform に作り直させる。`terraform import` は使わない。
+
+**理由** — [D-013](#d-013-委任された技術判断こちらで決定) の「Agent Space の作成は Terraform（再現性のため）」に最短で戻れる。
+削除時点で Target Domain 未登録・ユーザー0・各機能セットアップ前だったため、**失うものが無い。**
+
+**Application は消さない。かつ Terraform でも管理しない** — `SecurityAgent`（`app-966a2407-…`）はアカウントに1つの単位で、実質的なサービス有効化に相当する。Agent Space だけ作り直す。
+
+> **`awscc_securityagent_application` を `resource` として書いてはいけない。**
+> state に存在しない既存 Application と重複し、[Phase 4](./02-implementation-plan.md#phase-4-cicd-の拡充) の初回 apply が失敗する。
+> **Agent Space は Application を参照しない**（`awscc_securityagent_agent_space` に application 系の属性が無いことをスキーマで確認済み）ので、参照自体が不要。
+> ID が必要になったら**読み取り専用の data source**（`awscc_securityagent_application` / `awscc_securityagent_applications`）を使う。
+
+**[D-004](#d-004-手作業はアカウント発行のみ以降すべて-terraform) の「AWS 側の手作業はアカウント発行のみ」に、例外が1つ増えた** — Security Agent の Application 有効化がコンソール操作として残る。
+アカウント単位で一度きりの有効化であり、[Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) のブラウザ操作（GitHub App 認可・ペンテストのドメイン検証）と同種のものとして扱う。
+
+**却下** — **`terraform import` で state に取り込む。** 既存を壊さない利点はあるが、名前や属性が Terraform 定義と食い違ったまま state に入り、以後 plan のたびに差分を潰す作業が発生する。空の Agent Space に対して払う代償として大きい。
+
+**注意** — 削除は手作業で行う。**削除が済んでいなくても以降の作業は進めてよい**（[Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) で Terraform が作るときに名前が衝突したら、そのとき消せばよい）。
+
+---
+
 ## 未決事項
 
-**なし。** D-001〜D-015 で全項目を解消済み。以降で判断が必要になったものは D-016 以降として追記する。
+**判断事項は無い。** D-001〜D-019 で解消済み。新しい判断が生じたら D-020 以降として追記する。
+
+### 未確認のまま残っている事実
+
+判断ではなく、実機で確かめる項目。
+
+- **Security Agent の無料トライアル残枠**（[Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) 項目6）— CLI からは取得できなかった。コンソールで確認する。**ペンテスト実行前に必ず**（[D-015](#d-015-予算上限は月-100通知は管理アカウントのメールへ)）
+  → **トライアルの「期間」は制約にならない**（[D-011](#d-011-撤収はキャンペーン型検証期間中は起動しっぱなし期間後に-destroy) で1週間以内に全削除する方針が決まったため、2ヶ月枠の内側に収まる）。
+  **確認が要るのは「残枠」のほう。** 使い切っていればペンテスト1回 $50/task-hour が実費になり、[D-015](#d-015-予算上限は月-100通知は管理アカウントのメールへ) の上限 $100 の半分を消費しうる
+- **`devops-agent get-account-usage` が `AccessDenied` になる理由** — 同じ `aidevops` 名前空間の他 API は通るので名前空間ごとの deny ではない。仮説は①オンボード前は使えない ②使用量は請求データなので管理アカウント側にしか出ない ③ルートユーザー固有の制限。
+  **2026-08-03 に Security Agent を有効化した後も `AccessDenied` のままだった**が、これは①を否定しない — **`get-account-usage` は `devops-agent` の API であり、DevOps Agent 側の Agent Space はまだ存在しない**ため。[Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) で DevOps Agent の Agent Space を作った後に再試行すれば①を切り分けられる
+- **コストデータに実際の課金が乗ってくるか** — `ce:GetCostAndUsage` は正常に応答するが、アカウントが新品で支出ゼロのため金額の正しさは未検証。[Phase 1](./02-implementation-plan.md#phase-1-ブートストラップ--最小-ci) 以降に再確認する
+- **DevOps Agent の GitHub 連携を Terraform でどこまで書けるか**（[awscc プロバイダのスキーマ検証](#awscc-プロバイダのスキーマ検証phase-0-項目5) を参照）。[Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) で確認する
+- **`awscc_securityagent_target_domain` で HTTP_ROUTE 検証まで完了できるか** — 検証パスとトークンは computed 属性で読めるが、検証の完了を Terraform が待てるかは不明。成立すれば [Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) のブラウザ操作が1つ減る

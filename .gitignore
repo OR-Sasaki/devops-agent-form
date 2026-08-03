@@ -1,0 +1,29 @@
+# Terraform — Public リポジトリなので commit するとアカウント ID・バケット名が公開される（D-010 / Phase 1）
+#
+# ⚠️ .terraform.lock.hcl は「意図的に」除外していない。commit すること。
+#    HashiCorp が「You should include this file in your version control repository」と明記しており、
+#    除外すると CI とローカルでプロバイダ解決バージョンがずれる（Phase 0 で検証した awscc v1.95.0 と
+#    別バージョンで CI が走りうる）。
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+.terraform/
+*.tfvars
+*.tfvars.json
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# AWS コンソールのスクリーンショット — アカウント ID やエンドポイント URL が写り込む
+スクリーンショット*.png
+Screenshot*.png
+*.screenshot.png
+
+# ローカル環境
+.DS_Store
+.env
+.env.*
+node_modules/
