@@ -2,13 +2,13 @@
 
 グリルセッションで確定した決定を、決まった順に記録する。用語は [CONTEXT.md](../../CONTEXT.md) に従う。
 
-**ステータス: 決定確定（D-001〜D-036）／未決事項なし／Phase 0・Phase 1・Phase 2・Phase 3・Phase 4 完了／検証期間は 2026-08-10 頃まで**
+**ステータス: 決定確定（D-001〜D-037）／未決事項なし／Phase 0・Phase 1・Phase 2・Phase 3・Phase 4 完了／検証期間は 2026-08-10 頃まで**
 2026-08-02 のグリルセッションで全項目を解消。同日の外部レビューを受けて D-014・D-015 を追加し、[D-002](#d-002-実行基盤は-ecs-fargate--alb--dynamodb) のコスト見積りと [D-008](#d-008-リージョンは-ap-northeast-1-に統一) のリスク認識を訂正した。
 同日の [Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) の実機確認で D-016・D-017 を追加し、[D-008](#d-008-リージョンは-ap-northeast-1-に統一) の「3目標すべて東京で成立する」という記述を**再度訂正した**（[D-017](#d-017-目標2-の到達点を-agent-ready-specification-に縮小する) を参照）。
 [Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) 完了時に D-018・D-019 を、Phase 1 の着手準備で D-020 を追加した。
 [Phase 1](./02-implementation-plan.md#phase-1-ブートストラップ--最小-ci) の実施中に、公開リポジトリへの露出に関する判断として D-021・D-022 を追加し、初回 push 直前の外部レビュー（Codex）の指摘を受けて D-023〜D-025 を追加した。
 [Phase 2](./02-implementation-plan.md#phase-2-インフラ本体を書く) で `terraform/main/` を書く過程で D-026〜D-033 を追加し、**アラーム表のメトリクスを1件訂正した**（[D-031](#d-031-dynamodb-のスロットリング監視は-throttleevents-で行う)）。初回コミット後の外部レビュー（7回目）を受けて D-034 を追加した。
-[Phase 3](./02-implementation-plan.md#phase-3-アプリ)・[Phase 4](./02-implementation-plan.md#phase-4-cicd-の拡充) の着手時に、計画が決めていなかった2件（`/admin` の認証と fork からの PR の扱い）を D-035・D-036 として決めた。以降に新しい判断が生じたら D-037 以降として追記する。
+[Phase 3](./02-implementation-plan.md#phase-3-アプリ)・[Phase 4](./02-implementation-plan.md#phase-4-cicd-の拡充) の着手時に、計画が決めていなかった2件（`/admin` の認証と fork からの PR の扱い）を D-035・D-036 として決めた。初回 apply の後に永続的な差分が見つかり D-037 を追加した。以降に新しい判断が生じたら D-038 以降として追記する。
 
 ---
 
@@ -1464,9 +1464,46 @@ fork のコードをベースリポジトリの権限で走らせるイベント
 
 ---
 
+## D-037: awscc の永続的な差分は config 側を API に合わせて潰す
+
+**決定** — 初回 apply の後に `terraform plan` を回して見つかった**永続的な差分**を、**API が実際に保存している形に config を寄せる**ことで解消する。`ignore_changes` では隠さない。
+
+**経緯** — 初回 apply の直後、コードを1行も変えていない状態で `plan` が **`0 to add, 2 to change, 0 to destroy`** を返した。
+[D-009](#d-009-アプリも-terraform-も-ci-から-apply-する完全-gitops) は「Terraform にイメージタグを所有させると drift が出ない」と書いているが、**drift が出ていたのはイメージタグではなく `awscc` の2リソースだった。**
+
+**原因は3箇所あり、2種類に分かれる。**
+
+| 箇所 | config | API が返す値 |
+|---|---|---|
+| `awscc_devopsagent_association.configuration.aws.resources` | `[]` | `null` |
+| `awscc_securityagent_agent_space.integrated_resources` | `[]`（`connect_github_to_agents = false` のとき） | `null` |
+| `awscc_securityagent_agent_space.aws_resources.log_groups` | ロググループの **ARN** | ロググループの **名前** |
+
+1. **空リストと未設定は別物である。** `awscc` は「空リストを渡す」を「未設定」として保存し、refresh では `null` を返す。
+   config に `[]` を書いている限り、**Terraform は毎回「`null` → `[]`」の更新を計画し続ける。**
+   → `null` を書けば往復する。
+2. **`log_groups` は ARN を渡しても名前に正規化されて保存される。**
+   → `aws_cloudwatch_log_group.app.name` を渡せば往復する。
+   **⚠️ 同じ `aws_resources` の中でも `iam_roles` と `vpcs` は ARN のまま往復する。** リソース単位でも属性単位でもなく、**属性ごとに扱いが違う。**
+
+**修正後、apply を1回も挟まずに `plan` が `No changes.` になった。** 実インフラは元々 API の形で保存されており、ずれていたのは config の側だったことが確認できる。
+
+**なぜ `lifecycle { ignore_changes }` を使わないのか**
+
+- **差分が消えるのではなく、見えなくなるだけである。** `ignore_changes` を張った属性は、**本当に変えたくなったときも Terraform が追随しない。**
+- **[Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) の判定と正面から衝突する。** 観点1 のデモは「Terraform の変更がインシデントを起こしたことを Agent が突き止める」ことを見るもので、**`plan` の出力が信用できる状態であることが前提**になっている。毎回2件の嘘の変更が出ていると、本物の1件がそこに埋もれる。
+- **`pr.yml` が plan を PR にコメントする**（[D-036](#d-036-fork-からの-pr-では-aws-を使うジョブを実行しない)）。常に差分が出ていると、レビューで「いつもの2件」を読み飛ばす癖がつく。**それは観点1 のデモが壊れることと同義である。**
+
+**一般化** — **`plan` が通ったことは、`apply` 後に `plan` が空になることを意味しない。**
+[Phase 2](./02-implementation-plan.md#phase-2-インフラ本体を書く) の完了条件は「`plan` が通ること」だったので、この種の誤りは**構造的に初回 apply の後でしか見つからない。**
+`awscc` は Cloud Control API 越しにスキーマだけを見ており、**「書いた値がどう保存されるか」はスキーマに現れない。**
+→ **awscc のリソースを足したときは、apply の後にもう一度 `plan` を回して空になることを確かめる。**
+
+---
+
 ## 未決事項
 
-**判断事項は無い。** D-001〜D-036 で解消済み。新しい判断が生じたら D-037 以降として追記する。
+**判断事項は無い。** D-001〜D-037 で解消済み。新しい判断が生じたら D-038 以降として追記する。
 
 ### 未確認のまま残っている事実
 

@@ -182,9 +182,13 @@ resource "awscc_devopsagent_association" "aws_account" {
       # "monitor" は自アカウント監視。クロスアカウントなら "source"。
       account_type = "monitor"
 
-      # 空 = アカウント内の全リソースが対象。専用アカウント（D-003）なので
+      # 未指定 = アカウント内の全リソースが対象。専用アカウント（D-003）なので
       # 拾うものはすべて本プロジェクトのものになり、絞り込む必要が無い。
-      resources = []
+      #
+      # ⚠️ ここに [] を書かないこと。**永続的な差分になる**（D-037）。
+      #    API は未設定として保存し、refresh で null が返る。config に [] を書くと
+      #    「null → []」の更新が毎回 plan に出続け、本物の変更が埋もれる。
+      resources = null
     }
   }
 }

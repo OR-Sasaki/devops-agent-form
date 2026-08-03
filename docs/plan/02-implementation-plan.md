@@ -416,6 +416,10 @@ Hono ＋ TypeScript ＋ JSX、Node 22。
 > | 5. `pr.yml` が PR で動き、plan 結果がコメントされる | ✅ [PR #1](https://github.com/OR-Sasaki/devops-agent-form/pull/1) |
 >
 > **項目2 は [Phase 6](#phase-6-受け入れ確認) の項目1 そのものであり、`assign_public_ip = true` が効いていることの実測になっている。**
+>
+> **⚠️ 初回 apply の直後、コードを変えていないのに `plan` が2件の変更を出した。**
+> `awscc` の2リソースで **config が API の保存形と食い違っていた**ためで、[D-037](./00-decisions.md#d-037-awscc-の永続的な差分は-config-側を-api-に合わせて潰す) で config 側を直して `No changes.` にした。
+> **[Phase 2](#phase-2-インフラ本体を書く) の完了条件は「`plan` が通ること」だったので、この種の誤りは構造的に初回 apply の後でしか見つからない。**
 
 [Phase 1](#phase-1-ブートストラップ--最小-ci) で作った最小 `deploy.yml`（OIDC 疎通確認のみ）に、**ビルドと apply を足す**フェーズ。ゼロから作るのではない。
 

@@ -26,7 +26,11 @@ resource "awscc_securityagent_agent_space" "main" {
   # 脅威モデリングとペネトレーションテストの文脈として、この構成のリソースを渡す。
   # Agent が「何を守る対象と見なすか」がここで決まる。
   aws_resources = {
-    log_groups = [aws_cloudwatch_log_group.app.arn]
+    # ⚠️ log_groups だけ ARN ではなく**名前**を渡す（D-037）。
+    #    ARN を渡すと API 側が名前に正規化して保存するため、refresh のたびに
+    #    「/ecs/devops-agent-form → arn:aws:logs:…」の差分が出続ける。
+    #    隣の iam_roles と vpcs は ARN のまま往復する。**同じリソースの中で扱いが違う。**
+    log_groups = [aws_cloudwatch_log_group.app.name]
     iam_roles  = [aws_iam_role.ecs_task.arn, aws_iam_role.ecs_execution.arn]
 
     # ⚠️ vpcs は単一オブジェクトではなくリスト（スキーマで NESTING=list を確認）。
@@ -73,7 +77,10 @@ resource "awscc_securityagent_agent_space" "main" {
         }
       ]
     }
-  ] : []
+    # ⚠️ else 側は [] ではなく null にする。**[] は永続的な差分になる**（D-037）。
+    #    API は未設定として保存し refresh で null が返るため、
+    #    config に [] を書くと「null → []」の更新が毎回 plan に出続ける。
+  ] : null
 
   tags = [
     { key = "Project", value = var.project },
