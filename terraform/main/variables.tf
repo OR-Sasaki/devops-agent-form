@@ -211,6 +211,32 @@ variable "connect_github_to_agents" {
   default     = false
 }
 
+variable "enable_pr_code_review_comments" {
+  description = <<-EOT
+    Security Agent に PR のコードレビューコメントを付けさせるか。**既定は false**（D-045）。
+
+    ⚠️ **リポジトリが private のときしか true にできない。**
+    public のまま true にすると apply が 400 で落ちる。API が返す原文:
+
+      Public GitHub repositories are supported for pentesting and
+      not for code review comments.
+
+    ⚠️ Terraform はリポジトリの可視性を知らないため、これを事前に検証できない。
+    **順序が唯一の防御である。**
+
+      1. gh repo edit OR-Sasaki/devops-agent-form --visibility private
+      2. gh variable set ENABLE_PR_CODE_REVIEW_COMMENTS --body true → deploy
+      3. PR を出す（⚠️ draft では発火しない。必ず Ready for review にする）
+      4. コメントを確認したら false に戻して deploy
+      5. gh repo edit … --visibility public
+
+    ⚠️ **4 を 5 より先に行うこと。** public に戻してから false にしようとすると、
+    その apply 自体が「public なのに true」で落ちる。
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "security_agent_github_integration_id" {
   description = <<-EOT
     Security Agent 側の GitHub 連携の integration ID（D-044）。

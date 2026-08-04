@@ -79,8 +79,8 @@ resource "awscc_securityagent_agent_space" "main" {
           }
 
           git_hub_capabilities = {
-            # ⚠️ **false 固定。public リポジトリでは true にできない**（D-045）。
-            #    true にすると apply が 400 で落ちる。API が返した原文:
+            # ⚠️ **リポジトリが private のときしか true にできない**（D-045）。
+            #    public のまま true にすると apply が 400 で落ちる。API が返した原文:
             #
             #      Public GitHub repositories are supported for pentesting and
             #      not for code review comments.
@@ -90,9 +90,10 @@ resource "awscc_securityagent_agent_space" "main" {
             #    DevOps Agent 側の "Public repository limitation" と同じ制限が
             #    Security Agent にもある。**2つのエージェントで違うのは単一インストール制約のほうだけ。**
             #
-            #    → これにより Phase 6 の項目10（PR にコードレビューコメントが付く）は
-            #      D-010（public リポジトリ）と両立しない。判断は D-045 を参照。
-            leave_comments = false
+            #    ⚠️ Terraform はリポジトリの可視性を知らないので、これを事前に検証できない。
+            #       順序を間違える（public のまま true にする）と apply で落ちる。
+            #       **必ず private にしてから true にする。** 手順は D-045 に書いてある。
+            leave_comments = var.enable_pr_code_review_comments
 
             # ⚠️ false 固定。自動修復は D-014 でスコープ外。
             # Public リポジトリでは修正 PR ではなく diff 添付になるため、

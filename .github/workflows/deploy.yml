@@ -126,6 +126,11 @@ jobs:
           # ⚠️ リテラル "GITHUB" ではなく認可時に払い出される i- 始まりの ID（D-044）。
           #    アカウント固有で AWS の認証情報が無いと読めないため、リポジトリには置かない（D-020）。
           SECURITY_AGENT_GITHUB_INTEGRATION_ID: ${{ vars.SECURITY_AGENT_GITHUB_INTEGRATION_ID }}
+          # ⚠️ リポジトリが private のときしか true にできない（D-045）。
+          ENABLE_PR_CODE_REVIEW_COMMENTS: ${{ vars.ENABLE_PR_CODE_REVIEW_COMMENTS }}
+          # 上のガードが gh repo view で可視性を読むために要る。
+          # contents: read で足りる（可視性はリポジトリのメタデータ）。
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -145,6 +150,16 @@ jobs:
               exit 1
             fi
             args+=(-var "security_agent_github_integration_id=${SECURITY_AGENT_GITHUB_INTEGRATION_ID}")
+            # ⚠️ public リポジトリのまま true にすると apply が 400 で落ちる（D-045）。
+            #    Terraform 側では可視性を検証できないので、ここで実際の可視性を見て先に潰す。
+            if [ "${ENABLE_PR_CODE_REVIEW_COMMENTS}" = "true" ]; then
+              visibility="$(gh repo view "${GITHUB_REPOSITORY}" --json visibility --jq .visibility)"
+              if [ "$visibility" != "PRIVATE" ]; then
+                echo "::error::ENABLE_PR_CODE_REVIEW_COMMENTS=true はリポジトリが private のときだけ使えます（現在: ${visibility}）。D-045 の手順を参照してください。"
+                exit 1
+              fi
+              args+=(-var "enable_pr_code_review_comments=true")
+            fi
           fi
           # ペンテストのターゲットドメインを Terraform で登録する（D-038）。
           # 検証トークンは computed 属性から ALB のリスナールールへ直接渡るので、

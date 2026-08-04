@@ -2,7 +2,7 @@
 
 グリルセッションで確定した決定を、決まった順に記録する。用語は [CONTEXT.md](../../CONTEXT.md) に従う。
 
-**ステータス: 決定確定（D-001〜D-044）／Phase 0・Phase 1・Phase 2・Phase 3・Phase 4 完了／Phase 5・Phase 6 進行中／検証期間は 2026-08-10 頃まで**
+**ステータス: 決定確定（D-001〜D-045）／Phase 0・Phase 1・Phase 2・Phase 3・Phase 4 完了／Phase 5・Phase 6 進行中／検証期間は 2026-08-10 頃まで**
 2026-08-02 のグリルセッションで全項目を解消。同日の外部レビューを受けて D-014・D-015 を追加し、[D-002](#d-002-実行基盤は-ecs-fargate--alb--dynamodb) のコスト見積りと [D-008](#d-008-リージョンは-ap-northeast-1-に統一) のリスク認識を訂正した。
 同日の [Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) の実機確認で D-016・D-017 を追加し、[D-008](#d-008-リージョンは-ap-northeast-1-に統一) の「3目標すべて東京で成立する」という記述を**再度訂正した**（[D-017](#d-017-目標2-の到達点を-agent-ready-specification-に縮小する) を参照）。
 [Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) 完了時に D-018・D-019 を、Phase 1 の着手準備で D-020 を追加した。
@@ -45,7 +45,22 @@
 | Terraform | `awscc_securityagent_agent_space` あり。AWS 公式サンプル [aws-samples/sample-terraform-for-security-agent](https://github.com/aws-samples/sample-terraform-for-security-agent)（2026-07-03 更新）が `iam.tf` / `security-agent.tf` 等を提供 |
 | 作成されるもの | Application（アカウントに1つ）、`SecurityAgentAppRole-*`（`AWSSecurityAgentWebAppPolicy`）、`SecurityAgentServiceRole-*`（ペンテスト用）、Agent Space、（任意）Target Domain、（任意）Pentest |
 | 機能 | PR の差分コードレビュー（GitHub 上にコメント）、リポジトリ全体スキャン、脅威モデリング、ペネトレーションテスト、自動修復（[D-014](#d-014-security-agent-の自動修復はスコープ外) でスコープ外） |
-| PR コードレビューの挙動 | 「Ready for review」で発火（draft は対象外）。解析開始時にコメントを出し、完了後に指摘をまとめて1レビューで投稿。**指摘ゼロでも `No issues identified.` とコメントする** → 脆弱性を仕込まなくても接続確認に使える。リポジトリ可視性による制限は無い |
+| PR コードレビューの挙動 | 「Ready for review」で発火（draft は対象外）。解析開始時にコメントを出し、完了後に指摘をまとめて1レビューで投稿。**指摘ゼロでも `No issues identified.` とコメントする** → 脆弱性を仕込まなくても接続確認に使える。~~リポジトリ可視性による制限は無い~~ **← 誤り。下記を参照** |
+
+> **⚠️ 「リポジトリ可視性による制限は無い」は誤りだった（2026-08-04 に実測）。**
+> `git_hub_capabilities.leave_comments = true` で apply したところ、**API が 400 で拒否した。** 返ってきた原文:
+>
+> ```
+> Public GitHub repositories are supported for pentesting and not for code review comments.
+> ```
+>
+> **これは検索結果の要約ではなく、AWS のサービス自身が拒否した一次観測である。**
+> `list-integrated-resources` も接続先を `"accessType": "PUBLIC"` として記録しており、可視性を見ていることが分かる。
+>
+> → **DevOps Agent 側の「Public repository limitation」と同じ制限が Security Agent にもある。**
+> [D-006](#d-006-security-agent-も併せて導入する) と [Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) の注意書きは「2つのエージェントで制約が違う」と書いていたが、
+> **違うのは GitHub App の単一インストール制約のほうだけで、public リポジトリの PR コードレビュー制限は両方にかかる。**
+> 帰結は [D-045](#d-045-コードレビューを見るときだけ一時的に-private-にする) を参照。
 
 **GitHub 連携（公式ドキュメントで確認済み）**
 
@@ -1878,9 +1893,57 @@ association は空の器に近く、払う代償に見合わない。
 
 ---
 
+## D-045: コードレビューを見るときだけ一時的に private にする
+
+**決定** — [Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) の項目10（PR に Security Agent のコードレビューコメントが付く）を確認するときだけ、
+リポジトリを**一時的に private にし、確認が済んだら public に戻す。** [D-010](#d-010-github-リポジトリは-publicor-sasakidevops-agent-form)（Public）は最終状態として維持する。
+
+**経緯** — [調査済みの外部事実](#aws-security-agent) は Security Agent の PR コードレビューについて「リポジトリ可視性による制限は無い」と書いていたが、**誤りだった。**
+`leave_comments = true` で apply したところ API が 400 で拒否した。
+
+```
+Public GitHub repositories are supported for pentesting and not for code review comments.
+```
+
+**これは検索結果の要約ではなく、AWS のサービス自身が拒否した一次観測である。**
+`list-integrated-resources` も接続先を `"accessType": "PUBLIC"` として記録しており、可視性を見ていることが分かる。
+
+**なぜ「未達で閉じる」でも「恒久的に private」でもないのか**
+
+| 案 | 判断 |
+|---|---|
+| **項目10 を未達として閉じる** | 却下。**接続できていないのか、可視性で無効なだけなのかを切り分ける**という項目10 本来の価値が得られない。ここを確認しないと、観点3 のデモで「コメントが付かない」を見たときに原因を特定できない |
+| **恒久的に private にする** | 却下。[D-010](#d-010-github-リポジトリは-publicor-sasakidevops-agent-form) を覆すと [D-014](#d-014-security-agent-の自動修復はスコープ外)（自動修復をスコープ外にした前提）と [D-017](#d-017-目標2-の到達点を-agent-ready-specification-に縮小する) の根拠も同時に変わる。**1項目の確認のために3つの決定を巻き戻す**のは釣り合わない |
+| **確認のときだけ private（採用）** | 項目10 を実測できて、最終状態は Public のまま。代償は運用手順が1つ増えること |
+
+**手順（順序が唯一の防御である）**
+
+```
+1. gh repo edit OR-Sasaki/devops-agent-form --visibility private
+2. gh variable set ENABLE_PR_CODE_REVIEW_COMMENTS --body true  → deploy
+3. PR を出す（⚠️ draft では発火しない。必ず Ready for review）
+4. コメントを確認したら false に戻して deploy
+5. gh repo edit … --visibility public
+```
+
+> **⚠️ 4 を 5 より先に行うこと。** public に戻してから false にしようとすると、
+> **その apply 自体が「public なのに true」で落ちる。** 順序を逆にすると自分で自分を詰ませる。
+
+**⚠️ Terraform はリポジトリの可視性を知らない。** そのため `variables.tf` 側では検証できない。
+`deploy.yml` に `gh repo view --json visibility` で実際の可視性を見るガードを置き、
+**public のまま true にしたら Terraform を起動する前に止める**ようにした。
+[D-043](#d-043-github-の-service_id-はリポジトリ変数から渡す) / [D-044](#d-044-devops-agent-の-github-association-は-terraform-で管理しない) と同じく「間違った値で apply に到達させない」という方針である。
+
+**private の間に起こることを織り込む** — [D-014](#d-014-security-agent-の自動修復はスコープ外) の前提（public なので修正 PR は出ない）が**その間だけ成立しない。**
+`remediate_code` は `false` 固定なので自動修復は動かないが、**「public だから出ない」ではなく「明示的に切ってあるから出ない」に根拠が変わる。**
+
+**public に戻した後、コメント機能は再び使えなくなる。** デモのたびにこの手順を回すことになる。
+
+---
+
 ## 未決事項
 
-**判断事項は無い。** D-001〜D-044 で解消済み。新しい判断が生じたら D-045 以降として追記する。
+**判断事項は無い。** D-001〜D-045 で解消済み。新しい判断が生じたら D-046 以降として追記する。
 
 ### 未確認のまま残っている事実
 
