@@ -79,8 +79,20 @@ resource "awscc_securityagent_agent_space" "main" {
           }
 
           git_hub_capabilities = {
-            # PR にコードレビューコメントを付ける。観点3 の主目的（Phase 6 の項目10）。
-            leave_comments = true
+            # ⚠️ **false 固定。public リポジトリでは true にできない**（D-045）。
+            #    true にすると apply が 400 で落ちる。API が返した原文:
+            #
+            #      Public GitHub repositories are supported for pentesting and
+            #      not for code review comments.
+            #
+            #    「調査済みの外部事実」は Security Agent の PR コードレビューについて
+            #    「リポジトリ可視性による制限は無い」と書いていたが、**それは誤りだった。**
+            #    DevOps Agent 側の "Public repository limitation" と同じ制限が
+            #    Security Agent にもある。**2つのエージェントで違うのは単一インストール制約のほうだけ。**
+            #
+            #    → これにより Phase 6 の項目10（PR にコードレビューコメントが付く）は
+            #      D-010（public リポジトリ）と両立しない。判断は D-045 を参照。
+            leave_comments = false
 
             # ⚠️ false 固定。自動修復は D-014 でスコープ外。
             # Public リポジトリでは修正 PR ではなく diff 添付になるため、
