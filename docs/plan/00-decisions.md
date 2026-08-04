@@ -597,6 +597,41 @@ Plan: 1 to add, 1 to change, 1 to destroy.
 - **Resource Explorer のインデックスが複数リージョンに自動作成されていた。** [devops-agent.tf](../../terraform/main/devops-agent.tf) が Agent Space ロールに与えた `iam:CreateServiceLinkedRole` が実際に使われたということ
 - インデックスを検索すると **ALB → ECS（クラスタ・サービス・タスク定義）→ DynamoDB が揃って登録されている**（`devops-agent-form` で 35 件）
 
+**項目8・9・10 の結果（2026-08-04）**
+
+| 項目 | 結果 |
+|---|---|
+| **8 GitHub 接続** | ✅ 両方。DevOps Agent は association（`serviceId` は UUID）、Security Agent は integrated resource（`accessType: PUBLIC`） |
+| **9 ターゲット検証** | ✅ **`VERIFIED`**。`gawacchi.link` を DNS_TXT で検証。`Verification successful for domain gawacchi.link. This domain can be used in pentests` |
+| **10 コードレビュー** | ✅ **コメントが付いた**（[D-045](#d-045-コードレビューを見るときだけ一時的に-private-にする) の手順で一時的に private にして確認） |
+
+**項目10 で実際に返ってきたもの** — [D-035](#d-035-ベースラインには観点3-の故障を1つも置かない) は「指摘ゼロなら `No issues identified.`」を想定していたが、
+**実際には2件の指摘が返り、しかもどちらも妥当だった。**
+
+- 解析開始時に「reviewing your pull request」のコメント（文書どおりの2段構え）
+- 完了後に **`state=COMMENTED` のレビュー1件 ＋ インラインコメント2件**
+- 指摘対象は**アプリではなく、その PR で書き換えた CI ワークフロー**だった
+
+> **判定は「コメントが付くか」で行う（[D-035](#d-035-ベースラインには観点3-の故障を1つも置かない)）ので合格である。**
+> 指摘内容の検証と対応は [D-047](#d-047-連携-id-は-variables-ではなく-secrets-に置く) に記録した。**1件は実測すると経路が指摘と違い、もう1件は影響が過大だった。**
+> エージェントの指摘も裏取りしてから受け入れる、という原則がそのまま必要だった。
+
+**DNS_TXT の検証値は `routePath` と違って加工が要らなかった**
+
+| | API が返した値 | 加工 |
+|---|---|---|
+| HTTP_ROUTE の `routePath` | `.well-known/…`（先頭の `/` 無し） | **要**（ALB の path-pattern に合わせて `/` を足す） |
+| DNS_TXT の `dnsRecordName` | `_aws_securityagent-challenge.gawacchi.link` | **不要**（そのまま Route 53 のレコード名になる） |
+| DNS_TXT の `token` | `aws-securityagent-domain-verification=…` | **不要**（`aws_route53_record` が TXT の引用符を自動で付ける） |
+
+**Route 53 の TXT レコードは、255 文字以下なら引用符を自分で書かなくてよい**（実測）。
+`records = [token]` と書くと `"aws-securityagent-domain-verification=…"` として保存された。
+
+**⚠️ Security Agent 側の可視性の認識は即座には追随しない** — public に戻した直後も
+`list-integrated-resources` は `"accessType": "PRIVATE"` を返し続けた。**キャッシュされている。**
+`leave_comments` を先に `false` へ戻してあるので実害は無いが、
+**可視性を戻した直後に「まだ private 扱いだから」と判断してはいけない。**
+
 **エージェントの GitHub 連携について CLI から判明したこと**
 
 | 事実 | 根拠 |
@@ -2028,9 +2063,29 @@ terraform plan  SECURITY_AGENT_GITHUB_INTEGRATION_ID: <実値>
   **一方 `us-east-1` は `AccessDeniedException` のままである。** そちらには Agent Space を作っていない。
   → **この API は「そのリージョンに Agent Space が存在すること」を要求する。** 権限や請求データの所在（仮説②）でもルート固有の制限（仮説③）でもなかった。
   なお `limit: -1` は無料トライアルの残枠を示す値ではないため、**[Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) の Security Agent の残枠確認は依然としてコンソールで行う必要がある**（そもそも別サービスの API である）
-- **コストデータに実際の課金が乗ってくるか** — [Phase 2](./02-implementation-plan.md#phase-2-インフラ本体を書く) で再実行したが**まだ判定できなかった**。`ce:GetCostAndUsage` は正常に応答するものの金額は `0` のままで、これは①反映遅延 ②Phase 1 のリソースの請求額がそもそもほぼゼロ、で説明がついた。
-  → **2026-08-03 11:42 (UTC) にインフラが稼働を始めた**（[Phase 3・4 の実機確認結果](#phase-34-の実機確認結果2026-08-03)）。ALB・Fargate ×2・Public IPv4 ×4 が動き出したので、**2026-08-04 中に `ce:GetCostAndUsage` を叩けば決着する。**
-  それまでは反映遅延と区別がつかないため、**この時点で $0 が返ることを「見えない」と読んではいけない。** 判定は [Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) の項目11 で行う
+- ~~**コストデータに実際の課金が乗ってくるか**~~ → **✅ 乗った（2026-08-04）。ただし完全な判定は 2026-08-05 まで待つ。**
+
+  **2026-08-03 の実績は $1.0254。** これは**稼働 12.3 時間ぶんの部分日**である（11:42 UTC 開始）。
+  24 時間に引き伸ばすと **約 $2.0/日**。
+
+  | 内訳（8/3 の実績） | 金額 | 24h 換算 | [D-002](#d-002-実行基盤は-ecs-fargate--alb--dynamodb) の見積り |
+  |---|---|---|---|
+  | ECS（Fargate ×2） | $0.321 | $0.63 | $0.75 |
+  | ELB | $0.267 | $0.52 | $0.59 |
+  | VPC（Public IPv4 ×4） | $0.209 | $0.41 | $0.49 |
+  | **CloudWatch** | **$0.202** | **$0.39** | **見積りに含めていない** |
+  | その他（S3 / ECR / DynamoDB 等） | $0.026 | — | — |
+
+  > **見積りの3項目はいずれも下振れしている**（合計 $1.56 対 見積り $1.81）。
+  > **超過分はまるごと CloudWatch である。** [D-002](#d-002-実行基盤は-ecs-fargate--alb--dynamodb) は「ALB の LCU、CloudWatch Logs、Container Insights、
+  > CloudTrail の保存料は上表に含まない（**デモ規模では小さいが、ゼロではない**）」と書いていたが、
+  > **「小さい」は誤りで、実際には請求の約 20% を占める。** Container Insights が `enhanced` であることが効いている。
+  >
+  > **予算上限（月 $100、[D-015](#d-015-予算上限は月-100通知は管理アカウントのメールへ)）に対する脅威にはならない。** 1週間で約 $14 であり、[D-011](#d-011-撤収はキャンペーン型検証期間中は起動しっぱなし期間後に-destroy) の見積り（約 $13）とほぼ一致する。
+
+  **⚠️ 2026-08-04 の日次は照会時点で `0` を返す。** これは反映遅延であって「コストが見えない」ではない
+  （[Phase 2](./02-implementation-plan.md#phase-2-インフラ本体を書く) で同じ誤読をしかけた経緯がある）。**部分日からの外挿ではない確定値は 2026-08-05 に読める。**
+  **HOURLY 粒度は使えない** — 支払いアカウント側の Cost Explorer 設定でのオプトインが要る（`AccessDeniedException`）。
 - ~~**DevOps Agent の GitHub 連携を Terraform でどこまで書けるか**~~ → **✅ 解決（2026-08-04）。境界がはっきりした。**
 
   | 段階 | どこでやるか |

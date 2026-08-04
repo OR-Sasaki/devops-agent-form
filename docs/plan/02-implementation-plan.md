@@ -556,15 +556,22 @@ AWS 公式サンプル [aws-samples/sample-terraform-for-security-agent](https:/
 |---|---|---|
 | 1 | **ECS タスクが 2台とも起動し、ECR の pull と CloudWatch Logs への送信が成功している**（`assign_public_ip` の検証。ここが通らないと以降は全て見られない） | ✅ Phase 4 で確認 |
 | 2 | フォームが動き、送信内容が DynamoDB に入り、`/admin` に出る | ✅ Phase 4 で確認 |
-| 3 | DevOps Agent のコンソールにトポロジー（ALB → ECS → DynamoDB）が出る | 🚧 前提は確認済み（Resource Explorer に 35 件、association は `valid`）。**コンソールの目視が残る** |
+| 3 | DevOps Agent のコンソールにトポロジー（ALB → ECS → DynamoDB）が出る | 🚧 前提は確認済み（Resource Explorer に 35 件、association は `valid`）。**コンソールの目視だけが残る** |
 | 4 | アラームが**症状ごとに分かれて**存在し、閾値と欠損データ設定が入っている | ✅ 6本。[D-039](./00-decisions.md#d-039-unhealthyhostcount-は-breaching-のまま維持する) で `breaching` 維持と決定 |
 | 5 | CloudTrail に設定変更が記録される（観点1の前提） | ✅ セッション名 `gha-<run_id>` から Actions 実行まで辿れる |
 | 6 | `var.fault_injection` の口が通っている（観点1の前提） | ✅ **6値すべて** `plan` で確認（故障は仕込んでいない） |
 | 7 | コミット SHA が**構造化ログ・イメージタグ・ECS タスク定義**の3箇所に残り、アラーム → ログ → コミットが辿れる（観点2の前提） | ✅ Phase 4 で確認 |
-| 8 | GitHub が DevOps Agent と Security Agent の**両方**に接続済み（観点2・3の前提） | 🚧 **GitHub App の認可（ブラウザ）待ち** |
-| 9 | ペンテストのターゲット検証が完了している（観点3の前提） | 🚧 登録・トークン配信・発火の経路は動作確認済み。**証明書が要る**（[D-042](./00-decisions.md#d-042-http_route-検証は-https-と有効な証明書を要求するドメインを取得して-dns_txt-に切り替える)） |
-| 10 | PR を出すと Security Agent がコードレビューコメントを付ける | 🚧 項目8 待ち |
-| 11 | **日次の実績が [D-002](./00-decisions.md#d-002-実行基盤は-ecs-fargate--alb--dynamodb) の見積り（1日 約 $1.8）の範囲に収まっている**ことを Cost Explorer で確認し、[D-015](./00-decisions.md#d-015-予算上限は月-100通知は管理アカウントのメールへ) の予算アラートが設定済み | 🚧 **2026-08-04 以降でないと判定できない** |
+| 8 | GitHub が DevOps Agent と Security Agent の**両方**に接続済み（観点2・3の前提） | ✅ 両方。`service_id` の実値は UUID だった（[D-043](./00-decisions.md#d-043-github-の-service_id-はリポジトリ変数から渡す)）／DevOps 側の association は Terraform で管理しない（[D-044](./00-decisions.md#d-044-devops-agent-の-github-association-は-terraform-で管理しない)） |
+| 9 | ペンテストのターゲット検証が完了している（観点3の前提） | ✅ **`VERIFIED`**。`gawacchi.link` を DNS_TXT で検証（[D-042](./00-decisions.md#d-042-http_route-検証は-https-と有効な証明書を要求するドメインを取得して-dns_txt-に切り替える)） |
+| 10 | PR を出すと Security Agent がコードレビューコメントを付ける | ✅ **コメントが付いた**（一時的に private にして確認。[D-045](./00-decisions.md#d-045-コードレビューを見るときだけ一時的に-private-にする)）。**指摘2件はどちらも妥当で、[D-047](./00-decisions.md#d-047-連携-id-は-variables-ではなく-secrets-に置く) で対応した** |
+| 11 | **日次の実績が [D-002](./00-decisions.md#d-002-実行基盤は-ecs-fargate--alb--dynamodb) の見積り（1日 約 $1.8）の範囲に収まっている**ことを Cost Explorer で確認し、[D-015](./00-decisions.md#d-015-予算上限は月-100通知は管理アカウントのメールへ) の予算アラートが設定済み | 🔶 **部分日から約 $2.0/日**。見積りの3項目は下振れし、超過分はまるごと CloudWatch。**確定値は 2026-08-05 に読める** |
+
+> **項目10 は「コメントの有無」で判定する**（[D-035](./00-decisions.md#d-035-ベースラインには観点3-の故障を1つも置かない)）。
+> 実際には `No issues identified.` ではなく**2件の指摘**が返り、対象はアプリではなく
+> **その PR で書き換えた CI ワークフロー**だった。どちらも妥当な指摘で、[D-047](./00-decisions.md#d-047-連携-id-は-variables-ではなく-secrets-に置く) として対応済み。
+>
+> **⚠️ この項目は public リポジトリでは常時は成立しない**（[D-045](./00-decisions.md#d-045-コードレビューを見るときだけ一時的に-private-にする)）。
+> 確認のたびに private へ切り替える手順が要る。**手順の順序を間違えると詰むので D-045 を必ず読むこと。**
 
 **項目11 が「月額」ではなく「日次」なのはなぜか** — [D-011](./00-decisions.md#d-011-撤収はキャンペーン型検証期間中は起動しっぱなし期間後に-destroy) で検証期間を約1週間としたため、**1ヶ月分の請求は決して発生しない。**
 「月 $55 の範囲に収まるか」では受け入れ判定ができないので、日次の実績で見る。
