@@ -112,13 +112,17 @@ resource "awscc_securityagent_agent_space" "main" {
 # と相性が悪い。実行判断は人間が握る。D-040 で「検証まででフェーズを閉じる」と決めた。
 
 resource "awscc_securityagent_target_domain" "pentest" {
-  count = var.register_pentest_target_domain ? 1 : 0
+  count = var.register_pentest_target_domain && var.domain_name != null ? 1 : 0
 
-  target_domain_name = aws_lb.main.dns_name
+  # ⚠️ ALB の生 DNS 名ではなくカスタムドメインを登録する（D-042）。
+  #    当初は aws_lb.main.dns_name を渡していたが、**検証が原理的に完了しない**。
+  #    HTTP_ROUTE の検証は HTTPS で来て有効な証明書を要求し、
+  #    *.elb.amazonaws.com に ACM のパブリック証明書は取得できない（AWS が所有するドメインのため）。
+  target_domain_name = var.domain_name
 
-  # ALB が対象なら HTTP_ROUTE が推奨（調査済みの外部事実）。
-  # ALB は元々外部到達可能なので、DNS_TXT のようにゾーンを触る必要が無い。
-  verification_method = "HTTP_ROUTE"
+  # ⚠️ HTTP_ROUTE ではなく DNS_TXT。**証明書が要らなくなるのが選定理由**（D-042）。
+  #    検証用の TXT レコードは dns.tf が computed 属性からそのまま置く。
+  verification_method = "DNS_TXT"
 
   # ⚠️ awscc に default_tags は無いので明示的に付ける。
   #    なお securityagent の tags は NESTING=list（devopsagent 側は set）。

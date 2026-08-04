@@ -61,71 +61,22 @@ resource "aws_lb_listener" "http" {
 }
 
 # --------------------------------------------------------------------------
-# ペネトレーションテストの HTTP_ROUTE 検証用ルート（Phase 5）
+# ペネトレーションテストの検証用ルートは、ここには無い
 # --------------------------------------------------------------------------
 #
-# AWS がターゲットドメイン検証で提示するパスにトークンを置き、HTTP で取得させる。
-# アプリ側ではなく ALB 側に置くのは、**アプリを再デプロイせずに値を差せる**ため。
+# ⚠️ かつてここに HTTP_ROUTE 検証用の fixed-response ルールがあったが、
+#    **検証方式を DNS_TXT に切り替えたので削除した**（D-042）。現在の実体は dns.tf にある。
 #
-# ⚠️ 値の出どころが Phase 5 で変わった（D-038）。
+# 削除に至るまでに実測で分かったことを残す。どれも「apply は通るのに動かない」種類なので、
+# 同じ形の誤りを別の場所でやらないために書いてある。
 #
-#   旧: ブラウザで提示された値を人がリポジトリ変数に入れ、-var で渡す
-#   新: awscc_securityagent_target_domain が computed で返す値を**直接**参照する
+#   1. **API が返す routePath には先頭の / が付かない。**
+#        "routePath": ".well-known/aws/securityagent-domain-verification.json"
+#      ALB の path-pattern は / で始まらないと一致しないため、そのまま渡すと
+#      ルールは作られるが永久に一致せず、リクエストはアプリへ流れて 404 になる
+#   2. **トークンは生ではなく JSON で返す。** 公式指定は { "tokens": ["<token>"] }
+#   3. **そもそもこの経路では検証が完了しない。** 検証は HTTPS で来て有効な証明書を要求し、
+#      *.elb.amazonaws.com に ACM のパブリック証明書は取れない（D-042）
 #
-# トークンが人手もリポジトリ変数も経由しなくなり、ブラウザ操作が丸ごと消えた。
-# 登録と検証発火の切り分けは security-agent.tf のコメントを参照。
-# ⚠️ ローカルから apply しない。apply 経路は CI 1本に保つ（D-009）。
-
-
-# ⚠️ Security Agent が返す route_path には**先頭の / が付かない**（2026-08-03 に実測）。
-#
-#     "routePath": ".well-known/aws/securityagent-domain-verification.json"
-#
-# 一方 ALB の path-pattern は **/ で始まらないと一致しない。**
-# そのまま渡すとルールは作られるが**永久に一致せず**、リクエストはアプリへ流れて 404 になる。
-# plan も apply も通り、**実際に URL を取得するまで発覚しない**種類の誤りである（D-037 と同じ形）。
-#
-# 将来 API が / 付きで返すようになっても壊れないよう、付いていなければ足す形にしてある。
-locals {
-  pentest_route_path = var.register_pentest_target_domain ? (
-    startswith(awscc_securityagent_target_domain.pentest[0].verification_details.http_route.route_path, "/")
-    ? awscc_securityagent_target_domain.pentest[0].verification_details.http_route.route_path
-    : "/${awscc_securityagent_target_domain.pentest[0].verification_details.http_route.route_path}"
-  ) : null
-}
-
-resource "aws_lb_listener_rule" "pentest_verification" {
-  count = var.register_pentest_target_domain ? 1 : 0
-
-  listener_arn = aws_lb_listener.http.arn
-
-  # デフォルトアクション（アプリへの forward）より先に評価させる。
-  # アプリ側に同じパスのルートがあっても、検証はこのルールが確実に処理する。
-  priority = 1
-
-  condition {
-    path_pattern {
-      values = [local.pentest_route_path]
-    }
-  }
-
-  action {
-    type = "fixed-response"
-
-    fixed_response {
-      # ⚠️ 生のトークンではなく JSON で返す。公式ドキュメント（Enable an application domain
-      #    for penetration testing）が形式を明示している。原文:
-      #
-      #      Place the token provided by AWS Security Agent in the file using this format:
-      #        { "tokens": ["<insert-token>"] }
-      #
-      #    配列なのは、同じドメインを複数の Agent Space に登録したときに
-      #    両方のトークンを並べられるようにするため（同ページの Note）。
-      content_type = "application/json"
-      message_body = jsonencode({
-        tokens = [awscc_securityagent_target_domain.pentest[0].verification_details.http_route.token]
-      })
-      status_code = "200"
-    }
-  }
-}
+# 1 と 2 は直して実際に 200 と正しい JSON が返るところまで確認した。
+# そのうえで 3 が原理的な壁だったので、経路ごと差し替えている。
