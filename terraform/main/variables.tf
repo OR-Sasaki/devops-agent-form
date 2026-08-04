@@ -254,6 +254,10 @@ variable "security_agent_github_integration_id" {
   type        = string
   default     = null
 
+  # ⚠️ plan の出力に実値を出さない（D-047）。pr.yml は plan を PR にコメントするので、
+  #    この属性に差分が出た瞬間に値が公開される経路になる。
+  sensitive = true
+
   validation {
     condition     = var.security_agent_github_integration_id == null || can(regex("^i-[a-zA-Z0-9-]+$", var.security_agent_github_integration_id))
     error_message = "security_agent_github_integration_id は i- で始まる ID で指定すること（API の検証パターンに合わせる）。"

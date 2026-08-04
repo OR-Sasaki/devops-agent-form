@@ -124,8 +124,9 @@ jobs:
           CONNECT_GITHUB_TO_AGENTS: ${{ vars.CONNECT_GITHUB_TO_AGENTS }}
           REGISTER_PENTEST_TARGET_DOMAIN: ${{ vars.REGISTER_PENTEST_TARGET_DOMAIN }}
           # ⚠️ リテラル "GITHUB" ではなく認可時に払い出される i- 始まりの ID（D-044）。
-          #    アカウント固有で AWS の認証情報が無いと読めないため、リポジトリには置かない（D-020）。
-          SECURITY_AGENT_GITHUB_INTEGRATION_ID: ${{ vars.SECURITY_AGENT_GITHUB_INTEGRATION_ID }}
+          #    ⚠️ vars ではなく secrets に置く（D-047）。vars は Actions のログで
+          #       マスクされず、ステップの env ブロックがそのまま展開されるため。
+          SECURITY_AGENT_GITHUB_INTEGRATION_ID: ${{ secrets.SECURITY_AGENT_GITHUB_INTEGRATION_ID }}
           # ⚠️ リポジトリが private のときしか true にできない（D-045）。
           ENABLE_PR_CODE_REVIEW_COMMENTS: ${{ vars.ENABLE_PR_CODE_REVIEW_COMMENTS }}
           # 上のガードが gh repo view で可視性を読むために要る。
@@ -146,7 +147,7 @@ jobs:
             # integration ID が無いまま連携を有効にすると、リテラル null が API に届いて
             # 分かりにくいエラーで apply が落ちる。Terraform を起動する前に潰す（D-044）。
             if [ -z "${SECURITY_AGENT_GITHUB_INTEGRATION_ID}" ]; then
-              echo "::error::CONNECT_GITHUB_TO_AGENTS=true にはリポジトリ変数 SECURITY_AGENT_GITHUB_INTEGRATION_ID が必要です（D-044）。aws securityagent list-integrations --query 'integrationSummaries[?provider==\`GITHUB\`].integrationId' --output text で取得してください。"
+              echo "::error::CONNECT_GITHUB_TO_AGENTS=true にはシークレット SECURITY_AGENT_GITHUB_INTEGRATION_ID が必要です（D-044 / D-047）。aws securityagent list-integrations --query 'integrationSummaries[?provider==\`GITHUB\`].integrationId' --output text で取得してください。"
               exit 1
             fi
             args+=(-var "security_agent_github_integration_id=${SECURITY_AGENT_GITHUB_INTEGRATION_ID}")
