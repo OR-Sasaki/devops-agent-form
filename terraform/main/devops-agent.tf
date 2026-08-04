@@ -194,57 +194,34 @@ resource "awscc_devopsagent_association" "aws_account" {
 }
 
 # --------------------------------------------------------------------------
-# GitHub 連携（Phase 5 のブラウザ操作の後に有効化する）
+# GitHub 連携は Terraform で管理しない（D-044）
 # --------------------------------------------------------------------------
 #
-# ⚠️ 既定では作られない（var.connect_github_to_agents = false）。理由は D-029。
+# ⚠️ かつてここに awscc_devopsagent_association.github があったが、**削除した。**
+#    コンソールでの GitHub App 認可が、その場で association まで作ってしまうためである。
 #
-# GitHub App の認可はブラウザ操作でしか行えず（D-004 の例外）、認可前にこの association を
-# 作ろうとすると存在しない連携を参照することになる。**Phase 4 の初回 apply は必ず認可前**なので、
-# 既定で有効にすると初回 apply がその場で落ちる。
+# 2026-08-04 に実測した。認可を済ませた直後に list-associations を叩くと、
+# **Terraform が作ろうとしていたものと同じ association が既に存在していた。**
 #
-# なお Terraform でどこまで書けるか自体が未確認である。
-# awscc_devopsagent_service.service_details には git_hub が無い一方、
-# association の configuration には git_hub{owner, owner_type, repo_id, repo_name} がある
-# （スキーマで確認済み）。ブラウザ認可の後に service_id をどう得るのかは Phase 5 で実機確認する。
-
-resource "awscc_devopsagent_association" "github" {
-  count = var.connect_github_to_agents ? 1 : 0
-
-  agent_space_id = awscc_devopsagent_agent_space.main.id
-
-  # ⚠️ "aws" と違い、GitHub の service_id は**リテラルではなく認可時に払い出される UUID** である。
-  #    D-029 はここに暫定で "github" と書いていたが、**それは誤りだった**（D-043）。
-  #    実際の値は list-services で確認できる:
-  #
-  #      aws devops-agent list-services \
-  #        --query 'services[?serviceType==`github`].serviceId' --output text
-  #
-  #    ⚠️ service_id は API から見ればただの文字列なので **plan では捕まらず apply で落ちる。**
-  #       値はアカウント固有で AWS の認証情報が無いと読めないため、リポジトリ変数から渡す（D-020）。
-  service_id = var.devops_agent_github_service_id
-
-  configuration = {
-    git_hub = {
-      owner = split("/", var.github_repository)[0]
-      # ⚠️ 小文字。許容値は "organization" / "user" の2つだけ（プロバイダの検証で確認）。
-      # OR-Sasaki は個人アカウントなので "user"。
-      # list-services の additionalServiceDetails.github.ownerType も "user" を返した。
-      owner_type = "user"
-      repo_name  = split("/", var.github_repository)[1]
-      repo_id    = var.github_repo_id
-    }
-  }
-
-  # service_id を渡し忘れたまま連携を有効にすると、null が API に届いて
-  # 分かりにくいエラーで apply が落ちる。**plan の時点で止める。**
-  # D-032 と同じ「間違った値で静かに通るより、渡し忘れで止まるほうがよい」という判断。
-  lifecycle {
-    precondition {
-      condition     = var.devops_agent_github_service_id != null
-      error_message = "connect_github_to_agents = true のときは devops_agent_github_service_id が必須（D-043）。aws devops-agent list-services --query 'services[?serviceType==`github`].serviceId' --output text で取得すること。"
-    }
-  }
-
-  depends_on = [awscc_devopsagent_association.aws_account]
-}
+#   associationId ea5c1bf7-…   serviceId 612f7046-…（UUID）
+#   configuration.github { repoName, repoId, owner, ownerType } ← すべて期待どおりの値
+#
+# この状態で apply すると Cloud Control API が AlreadyExists で落ちる:
+#
+#   Resource of type 'AWS::DevOpsAgent::Association' with identifier
+#   'f0797e94-…' already exists.. ErrorCode: AlreadyExists
+#
+# **D-019（Security Agent の Application）とまったく同じ形である。**
+# 「Terraform の外で先に成立しているもの」を resource として書くと apply が壊れる。
+# D-029 自身がこの原理を書いていたが、**認可が association まで作るとは想定していなかった。**
+#
+# ⚠️ import もしない。理由は D-019 と同じで、
+#    ブラウザ操作が作ったものを state に取り込むと、以後 plan のたびに
+#    属性の食い違いを潰す作業が発生する。空の association に払う代償として大きい。
+#
+# 接続できているかは CLI で確認する（コンソールを開く必要は無い）:
+#
+#   aws devops-agent list-associations --agent-space-id <id> --profile devopsagent
+#
+# service_id を受け取る変数も置いていない。**どのリソースにも渡らない変数は置かない。**
+# 実値の取り方は D-043 に、Terraform で管理しない理由は D-044 に書いてある。

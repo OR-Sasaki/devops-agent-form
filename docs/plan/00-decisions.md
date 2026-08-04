@@ -2,7 +2,7 @@
 
 グリルセッションで確定した決定を、決まった順に記録する。用語は [CONTEXT.md](../../CONTEXT.md) に従う。
 
-**ステータス: 決定確定（D-001〜D-043）／Phase 0・Phase 1・Phase 2・Phase 3・Phase 4 完了／Phase 5・Phase 6 進行中／検証期間は 2026-08-10 頃まで**
+**ステータス: 決定確定（D-001〜D-044）／Phase 0・Phase 1・Phase 2・Phase 3・Phase 4 完了／Phase 5・Phase 6 進行中／検証期間は 2026-08-10 頃まで**
 2026-08-02 のグリルセッションで全項目を解消。同日の外部レビューを受けて D-014・D-015 を追加し、[D-002](#d-002-実行基盤は-ecs-fargate--alb--dynamodb) のコスト見積りと [D-008](#d-008-リージョンは-ap-northeast-1-に統一) のリスク認識を訂正した。
 同日の [Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) の実機確認で D-016・D-017 を追加し、[D-008](#d-008-リージョンは-ap-northeast-1-に統一) の「3目標すべて東京で成立する」という記述を**再度訂正した**（[D-017](#d-017-目標2-の到達点を-agent-ready-specification-に縮小する) を参照）。
 [Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) 完了時に D-018・D-019 を、Phase 1 の着手準備で D-020 を追加した。
@@ -1815,9 +1815,72 @@ GitHub App の認可を済ませてから `list-services` を叩いたところ�
 
 ---
 
+## D-044: DevOps Agent の GitHub association は Terraform で管理しない
+
+**決定** — `awscc_devopsagent_association.github` を**削除する。** DevOps Agent 側の GitHub 連携は、
+コンソールでの認可が作ったものをそのまま使う。**`import` もしない。**
+Security Agent 側は Terraform で管理を続けるが、`integration` にはリテラルではなく **integration ID** を渡す。
+
+**経緯 — [D-043](#d-043-github-の-service_id-はリポジトリ変数から渡す) を直して apply したら、別の2件で落ちた。** どちらも [D-029](#d-029-エージェントの-github-連携は既定で無効にする) が想定していなかった形である。
+
+**1件目 — 認可が association まで作っていた**
+
+```
+Resource of type 'AWS::DevOpsAgent::Association' with identifier
+'f0797e94-…' already exists.. ErrorCode: AlreadyExists
+```
+
+認可の直後に `list-associations` を叩くと、**Terraform が作ろうとしていたものと同じ association が既に存在していた。**
+
+| | 値 |
+|---|---|
+| `associationId` | `ea5c1bf7-…`（作成 2026-08-04T05:02:50Z = 認可した時刻） |
+| `serviceId` | `612f7046-…` |
+| `configuration.github` | `repoName` / `repoId` / `owner` / `ownerType` すべて期待どおり |
+
+> **[D-019](#d-019-先行作成した-agent-space-は削除しterraform-に作り直させる) とまったく同じ形である。** 「Terraform の外で先に成立しているもの」を `resource` で書くと apply が壊れる。
+> [D-029](#d-029-エージェントの-github-連携は既定で無効にする) はこの原理を自分で書いていたが、**認可が association まで作るとは想定していなかった。**
+> 想定していたのは「認可しないと参照先が無い」ことであって、「認可すると参照先ごと出来上がる」ことではなかった。
+
+**2件目 — `integration` は属性名と裏腹に ID を要求する**
+
+```
+Value 'GITHUB' at 'integrationId' failed to satisfy constraint:
+Member must satisfy regular expression pattern: i-[a-zA-Z0-9\-]+
+```
+
+`awscc_securityagent_agent_space` の属性名は `integration` だが、**API は `integrationId` として検証する。**
+実値は認可時に払い出される `i-` 始まりの ID（`aws securityagent list-integrations` で取れる）。
+
+**なぜ import しないのか** — [D-019](#d-019-先行作成した-agent-space-は削除しterraform-に作り直させる) と同じ理由。
+ブラウザ操作が作ったものを state に取り込むと、**属性が Terraform 定義と食い違ったまま入り、以後 plan のたびに差分を潰す作業が発生する。**
+association は空の器に近く、払う代償に見合わない。
+
+**帰結**
+
+- **`var.connect_github_to_agents` が効くのは Security Agent 側だけになった。** 名前と実体がずれるが、
+  Security Agent 側は依然この変数で制御されており、変数を分けるほどの利得が無い。**ずれていることを変数の description に明記した**
+- **`var.devops_agent_github_service_id` は削除した。** どのリソースにも渡らない変数を置かない。
+  実値の取り方は [D-043](#d-043-github-の-service_id-はリポジトリ変数から渡す) に、管理しない理由はここに書いてある
+- **接続の確認はコンソールを開かずに済む** — `aws devops-agent list-associations --agent-space-id <id>`
+
+**一般化（3件目なので、もう傾向と呼んでよい）**
+
+| 決定 | 「通った」のに正しくなかったもの |
+|---|---|
+| [D-037](#d-037-awscc-の永続的な差分は-config-側を-api-に合わせて潰す) | `plan` が通っても、apply 後に `plan` が空になるとは限らない |
+| [D-038](#d-038-ターゲットドメインは-terraform-で登録し検証発火は-cli-で行う) | `apply` が通っても、URL を取得すると 404 だった |
+| [D-043](#d-043-github-の-service_id-はリポジトリ変数から渡す) / **D-044** | `plan` が通っても、**識別子が実体を指しているとは限らない** |
+
+**`awscc` はスキーマしか見ておらず、値の意味を検証しない。**
+`service_id` / `integration` のような不透明な識別子は、プロバイダから見ればただの文字列である。
+→ **エージェント系のリソースを足したときは、`apply` の成功ではなく「API がその実体を返すか」で確認する。**
+
+---
+
 ## 未決事項
 
-**判断事項は無い。** D-001〜D-043 で解消済み。新しい判断が生じたら D-044 以降として追記する。
+**判断事項は無い。** D-001〜D-044 で解消済み。新しい判断が生じたら D-045 以降として追記する。
 
 ### 未確認のまま残っている事実
 

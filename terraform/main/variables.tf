@@ -147,17 +147,20 @@ variable "fault_injection" {
 # ペネトレーションテストのターゲットドメイン検証（Phase 5）
 # --------------------------------------------------------------------------
 #
-# 計画では Phase 3 の節に書かれているが、実体は ALB のリスナールールなので alb.tf にある。
-# Phase 2 でまとめて書いた理由は D-030 を参照。
+# ⚠️ 実体は dns.tf にある（D-042 で HTTP_ROUTE から DNS_TXT に切り替えたため）。
+# 元は alb.tf のリスナールールだった。その経緯は D-030 と alb.tf のコメントを参照。
 
 variable "register_pentest_target_domain" {
   description = <<-EOT
-    ペネトレーションテストのターゲットドメイン（= ALB の DNS 名）を Terraform で登録するか。
+    ペネトレーションテストのターゲットドメイン（= var.domain_name）を Terraform で登録するか。
     **既定は false**。
 
     true にすると security-agent.tf の awscc_securityagent_target_domain が作られ、
-    computed で返る verification_details.http_route の route_path と token が
-    alb.tf のリスナールールへ**直接**渡る。値が人手やリポジトリ変数を経由しない。
+    computed で返る verification_details.dns_txt の dns_record_name / dns_record_type / token が
+    dns.tf の Route 53 レコードへ**直接**渡る。値が人手やリポジトリ変数を経由しない。
+
+    ⚠️ var.domain_name が null だと何も作られない。ALB の生 DNS 名では検証が
+    原理的に完了しないため、ドメインが要る（D-042）。
 
     ⚠️ 登録だけでは検証は完了しない。検証は別 API の発火が要る（D-038）。
 
@@ -198,36 +201,39 @@ variable "connect_github_to_agents" {
     ⚠️ true にできるのは、Phase 5 で GitHub App の認可（ブラウザ操作）を済ませた後だけ。
     認可前に true にすると、存在しない連携を参照して apply が落ちる。理由は D-029 を参照。
 
-    ⚠️ true にするときは devops_agent_github_service_id も一緒に渡すこと。
+    ⚠️ 効くのは **Security Agent 側だけ**である（D-044）。
+    DevOps Agent 側の association はコンソールでの認可がその場で作ってしまうため、
+    Terraform では管理していない（devops-agent.tf のコメントを参照）。
+
+    ⚠️ true にするときは security_agent_github_integration_id も一緒に渡すこと。
   EOT
   type        = bool
   default     = false
 }
 
-variable "devops_agent_github_service_id" {
+variable "security_agent_github_integration_id" {
   description = <<-EOT
-    DevOps Agent 側の GitHub 連携の service_id（D-043）。
+    Security Agent 側の GitHub 連携の integration ID（D-044）。
 
-    ⚠️ **リテラル "github" ではない。** GitHub App の認可を済ませると払い出される UUID である。
+    ⚠️ **リテラル "GITHUB" ではない。** GitHub App の認可時に払い出される i- 始まりの ID である。
+    awscc の属性名は integration だが、API は integrationId として
+    `i-[a-zA-Z0-9\-]+` のパターンで検証する。
 
-      aws devops-agent list-services --profile devopsagent \
-        --query 'services[?serviceType==`github`].serviceId' --output text
+      aws securityagent list-integrations --profile devopsagent \
+        --query 'integrationSummaries[?provider==`GITHUB`].integrationId' --output text
 
-    D-029 はコードに暫定で "github" と書いており、**それは誤りだった**。
-    service_id は API から見ればただの文字列なので **plan では捕まらず、apply で落ちる。**
-
-    ⚠️ 値は AWS の認証情報が無いと読めないアカウント固有の識別子なので、
+    アカウント固有で AWS の認証情報が無いと読めない値なので、
     リポジトリには置かずリポジトリ変数から渡す（D-020 と同じ扱い）。
-    アカウントを作り直したり GitHub App を入れ直したりすると変わる。
   EOT
   type        = string
   default     = null
 
   validation {
-    condition     = var.devops_agent_github_service_id == null || can(regex("^[a-zA-Z0-9_-]+$", var.devops_agent_github_service_id))
-    error_message = "devops_agent_github_service_id は英数字・ハイフン・アンダースコアのみ（associate-service の pattern に合わせる）。"
+    condition     = var.security_agent_github_integration_id == null || can(regex("^i-[a-zA-Z0-9-]+$", var.security_agent_github_integration_id))
+    error_message = "security_agent_github_integration_id は i- で始まる ID で指定すること（API の検証パターンに合わせる）。"
   }
 }
+
 
 # --------------------------------------------------------------------------
 # 可観測性

@@ -56,7 +56,20 @@ resource "awscc_securityagent_agent_space" "main" {
   #    既定は false なので、Phase 4 の初回 apply では何も紐づかない（D-029）。
   integrated_resources = var.connect_github_to_agents ? [
     {
-      integration = "GITHUB"
+      # ⚠️ 属性名は integration だが、API は **integrationId** として検証する（D-044）。
+      #    リテラル "GITHUB" を渡すと apply で落ちる。実測したエラー:
+      #
+      #      Value 'GITHUB' at 'integrationId' failed to satisfy constraint:
+      #      Member must satisfy regular expression pattern: i-[a-zA-Z0-9\-]+
+      #
+      #    実値は GitHub App の認可時に払い出される i- 始まりの ID:
+      #
+      #      aws securityagent list-integrations \
+      #        --query 'integrationSummaries[?provider==`GITHUB`].integrationId' --output text
+      #
+      #    service_id（D-043）と**まったく同じ形の誤り**で、これが3件目である。
+      #    スキーマの属性名が実体を表していないため、plan では捕まらない。
+      integration = var.security_agent_github_integration_id
 
       provider_resources = [
         {
