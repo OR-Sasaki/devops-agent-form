@@ -40,7 +40,7 @@ export interface FieldError {
 }
 
 export type SubmitResult =
-  | { ok: true; submission: Submission }
+  | { ok: true; submission: Submission; nameLengthBucket: string }
   | { ok: false; errors: FieldError[]; values: SubmissionInput };
 
 /**
@@ -118,14 +118,42 @@ export async function processSubmission(body: Record<string, unknown>): Promise<
   }
 
   const submission = buildSubmission(values);
+  const nameLengthBucket = nameLengthBucketOf(values.name);
+
   await putSubmission(submission);
 
-  return { ok: true, submission };
+  return { ok: true, submission, nameLengthBucket };
 }
 
 // --------------------------------------------------------------------------
 // 内部
 // --------------------------------------------------------------------------
+
+/**
+ * 名前の長さの区分。
+ *
+ * ⚠️ 構造化ログに**名前そのものは載せない**（個人情報である）。代わりに長さの区分だけを残し、
+ *    「どのくらいの長さの入力が来ているか」を Logs Insights で数えられるようにする。
+ *
+ *      fields nameLengthBucket | filter message = "submission stored" | stats count() by nameLengthBucket
+ *
+ * 上端が FIELD_LIMITS.name なのは、これより長い名前は validateInput が先に弾くため。
+ */
+const NAME_LENGTH_BUCKETS = [
+  { label: "xs", min: 1, max: 4 },
+  { label: "s", min: 5, max: 9 },
+  { label: "m", min: 11, max: 20 },
+  { label: "l", min: 21, max: 40 },
+  { label: "xl", min: 41, max: FIELD_LIMITS.name },
+] as const;
+
+/** 検証を通った名前だけを渡すこと。空文字と上限超過は validateInput が既に弾いている。 */
+function nameLengthBucketOf(name: string): string {
+  const index = NAME_LENGTH_BUCKETS.findIndex(
+    (bucket) => name.length >= bucket.min && name.length <= bucket.max,
+  );
+  return NAME_LENGTH_BUCKETS[index].label;
+}
 
 /** 上限の2倍で頭打ちにする。**切り詰めた値で検証すると長さ超過を見逃す**ので、余裕を持たせる。 */
 function clamp(value: string, limit: number): string {

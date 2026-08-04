@@ -120,6 +120,8 @@ app.post("/submit", async (c) => {
   logger.info("submission stored", {
     requestId: c.get("requestId"),
     submissionId: result.submission.id,
+    // 名前そのものは載せない（個人情報である）。長さの区分だけ残す。submit.ts を参照。
+    nameLengthBucket: result.nameLengthBucket,
   });
 
   return c.html(
