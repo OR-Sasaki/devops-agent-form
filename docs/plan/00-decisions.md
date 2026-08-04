@@ -2,7 +2,7 @@
 
 グリルセッションで確定した決定を、決まった順に記録する。用語は [CONTEXT.md](../../CONTEXT.md) に従う。
 
-**ステータス: 決定確定（D-001〜D-042）／Phase 0・Phase 1・Phase 2・Phase 3・Phase 4 完了／Phase 5・Phase 6 進行中／検証期間は 2026-08-10 頃まで**
+**ステータス: 決定確定（D-001〜D-043）／Phase 0・Phase 1・Phase 2・Phase 3・Phase 4 完了／Phase 5・Phase 6 進行中／検証期間は 2026-08-10 頃まで**
 2026-08-02 のグリルセッションで全項目を解消。同日の外部レビューを受けて D-014・D-015 を追加し、[D-002](#d-002-実行基盤は-ecs-fargate--alb--dynamodb) のコスト見積りと [D-008](#d-008-リージョンは-ap-northeast-1-に統一) のリスク認識を訂正した。
 同日の [Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) の実機確認で D-016・D-017 を追加し、[D-008](#d-008-リージョンは-ap-northeast-1-に統一) の「3目標すべて東京で成立する」という記述を**再度訂正した**（[D-017](#d-017-目標2-の到達点を-agent-ready-specification-に縮小する) を参照）。
 [Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) 完了時に D-018・D-019 を、Phase 1 の着手準備で D-020 を追加した。
@@ -1350,6 +1350,9 @@ git rev-list --objects --all                    # 全 blob を直接 cat-file �
 **未確認のまま残る点** — DevOps Agent 側の association に渡す `service_id` の実値が分からない。
 AWS アカウント紐付けはリテラル `"aws"` だと確認済みだが、GitHub 連携が何になるかは**スキーマからは読めない**。コードには暫定で `"github"` と書いてあるが、**これは確認した値ではない。** [Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) で実機確認して直す。
 
+> **→ ✅ 実機で確認し、暫定値は誤りだと判明した（2026-08-04）。** 実値は認可時に払い出される **UUID** で、
+> `"github"` は `serviceType` のほうの値だった。対応は [D-043](#d-043-github-の-service_id-はリポジトリ変数から渡す) を参照。
+
 ---
 
 ## D-030: ペンテスト検証用の ALB リスナールールは Phase 2 で書く
@@ -1769,9 +1772,52 @@ DNS_TXT はドメインの所有を TXT レコードで示すだけで、**HTTPS
 
 ---
 
+## D-043: GitHub の service_id はリポジトリ変数から渡す
+
+**決定** — `awscc_devopsagent_association.github` の `service_id` を **`var.devops_agent_github_service_id`（既定 `null`）**に逃がし、実値は GitHub Actions のリポジトリ変数 `DEVOPS_AGENT_GITHUB_SERVICE_ID` から渡す。
+
+**経緯 — [D-029](#d-029-エージェントの-github-連携は既定で無効にする) が「確認した値ではない」と警告していた箇所が、実際に誤っていた。**
+GitHub App の認可を済ませてから `list-services` を叩いたところ、実値は**リテラルではなく UUID** だった。
+
+```json
+{
+  "serviceId": "612f7046-…",
+  "serviceType": "github",
+  "additionalServiceDetails": { "github": { "owner": "OR-Sasaki", "ownerType": "user" } }
+}
+```
+
+> **`serviceType` が `"github"` で、`serviceId` は別物である。** コードは `service_id = "github"` と書いていたので、
+> **型としては通るが実体を指さない。** `service_id` は API から見ればただの文字列なので
+> **`plan` では捕まらず `apply` で落ちる** —— [D-029](#d-029-エージェントの-github-連携は既定で無効にする) が予告していた失敗の形そのものだった。
+
+**なぜリポジトリ変数なのか（コードに直書きしない理由）**
+
+| | 判断 |
+|---|---|
+| **`var.github_repo_id` は直書きしている** | GitHub の公開 API から誰でも読める値だから（[D-023](#d-023-oidc-の信頼ポリシーは不変形式の-sub-に切り替える) で ID を取得した経緯どおり） |
+| **`service_id` は直書きしない** | **AWS の認証情報が無いと読めないアカウント固有の識別子**である。[D-020](#d-020-oidc-ロールの-arn-はリポジトリ変数に逃がす)（公開しないで済むものを公開する理由も無い）をそのまま適用した |
+
+加えて**この値は永続的でない。** アカウントを作り直したり GitHub App を入れ直したりすると変わるので、
+**コードではなく環境側の設定として持つほうが正しい。**
+
+**渡し忘れを2箇所で止める** — 値が無いまま連携を有効にすると、`null` が API に届いて分かりにくいエラーになる。
+
+1. `awscc_devopsagent_association.github` の `lifecycle.precondition` — **`plan` の時点で止まる**
+2. `deploy.yml` — Terraform を起動する前に落とす。CI のログで理由が先に読める
+
+[D-032](#d-032-イメージタグは-default-を持たない必須変数にする) と同じ「**間違った値で静かに通るより、渡し忘れで止まるほうがよい**」という判断である。
+
+**一般化** — **`plan` が通ることは、値が正しいことを何も意味しない。**
+`service_id` のような不透明な識別子は、プロバイダから見ればただの文字列である。
+[D-037](#d-037-awscc-の永続的な差分は-config-側を-api-に合わせて潰す)（`plan` が通っても `apply` 後に差分が残りうる）と [D-038](#d-038-ターゲットドメインは-terraform-で登録し検証発火は-cli-で行う)（`apply` が通っても URL を取得すると 404 だった）に続く3件目で、
+**いずれも「Terraform が通ったこと」を正しさの根拠にしてはいけないという同じ教訓に帰着する。**
+
+---
+
 ## 未決事項
 
-**判断事項は無い。** D-001〜D-042 で解消済み。新しい判断が生じたら D-043 以降として追記する。
+**判断事項は無い。** D-001〜D-043 で解消済み。新しい判断が生じたら D-044 以降として追記する。
 
 ### 未確認のまま残っている事実
 
@@ -1789,9 +1835,15 @@ DNS_TXT はドメインの所有を TXT レコードで示すだけで、**HTTPS
 - **コストデータに実際の課金が乗ってくるか** — [Phase 2](./02-implementation-plan.md#phase-2-インフラ本体を書く) で再実行したが**まだ判定できなかった**。`ce:GetCostAndUsage` は正常に応答するものの金額は `0` のままで、これは①反映遅延 ②Phase 1 のリソースの請求額がそもそもほぼゼロ、で説明がついた。
   → **2026-08-03 11:42 (UTC) にインフラが稼働を始めた**（[Phase 3・4 の実機確認結果](#phase-34-の実機確認結果2026-08-03)）。ALB・Fargate ×2・Public IPv4 ×4 が動き出したので、**2026-08-04 中に `ce:GetCostAndUsage` を叩けば決着する。**
   それまでは反映遅延と区別がつかないため、**この時点で $0 が返ることを「見えない」と読んではいけない。** 判定は [Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) の項目11 で行う
-- **DevOps Agent の GitHub 連携を Terraform でどこまで書けるか**（[awscc プロバイダのスキーマ検証](#awscc-プロバイダのスキーマ検証phase-0-項目5) を参照）。[Phase 5](./02-implementation-plan.md#phase-5-エージェント接続) で確認する。
-  → **[Phase 2](./02-implementation-plan.md#phase-2-インフラ本体を書く) で書く口だけは用意した**（[D-029](#d-029-エージェントの-github-連携は既定で無効にする)、既定は無効）。
-  **`awscc_devopsagent_association` に渡す GitHub 用の `service_id` の実値は依然として不明で、コード中の `"github"` は確認した値ではない**
+- ~~**DevOps Agent の GitHub 連携を Terraform でどこまで書けるか**~~ → **✅ 解決（2026-08-04）。境界がはっきりした。**
+
+  | 段階 | どこでやるか |
+  |---|---|
+  | GitHub App の**認可** | **ブラウザ必須。** `register-service` の許容値に GitHub が無く、help に「**excludes OAuth 3LO services**」と明記されている |
+  | Agent Space への**紐づけ** | **Terraform で書ける。** `awscc_devopsagent_association` の `configuration.git_hub` に `owner` / `owner_type` / `repo_name` / `repo_id` を渡す |
+
+  **`service_id` の実値は認可時に払い出される UUID だった**（`"github"` は `serviceType` のほう）。
+  リポジトリ変数から渡す形にした経緯は [D-043](#d-043-github-の-service_id-はリポジトリ変数から渡す) を参照。
 - ~~**`UnHealthyHostCount` のアラームが、トラフィックの無い時間帯に ALARM へ落ちるか**~~ → **✅ 落ちない（2026-08-03 に実測。一度目の結論を訂正した）。**
   初回 apply の直後に ALARM になったのは事実だが、**原因はトラフィックの不在ではなく「ALB 作成中でまだ登録ターゲットが無かった」ことだった。**
   `RequestCount` が 0 の25分間もアラームは OK のままで、メトリクスは毎分 `0.0` を報告し続けている（[Phase 5・6 の実機確認結果](#phase-56-の実機確認結果2026-08-03)）。
