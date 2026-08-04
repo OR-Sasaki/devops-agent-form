@@ -213,18 +213,36 @@ resource "awscc_devopsagent_association" "github" {
 
   agent_space_id = awscc_devopsagent_agent_space.main.id
 
-  # ⚠️ "aws" と違い、GitHub 連携の service_id が何になるかは未確認。
-  # Phase 5 で実際の値を確認してからここを直す。
-  service_id = "github"
+  # ⚠️ "aws" と違い、GitHub の service_id は**リテラルではなく認可時に払い出される UUID** である。
+  #    D-029 はここに暫定で "github" と書いていたが、**それは誤りだった**（D-043）。
+  #    実際の値は list-services で確認できる:
+  #
+  #      aws devops-agent list-services \
+  #        --query 'services[?serviceType==`github`].serviceId' --output text
+  #
+  #    ⚠️ service_id は API から見ればただの文字列なので **plan では捕まらず apply で落ちる。**
+  #       値はアカウント固有で AWS の認証情報が無いと読めないため、リポジトリ変数から渡す（D-020）。
+  service_id = var.devops_agent_github_service_id
 
   configuration = {
     git_hub = {
       owner = split("/", var.github_repository)[0]
       # ⚠️ 小文字。許容値は "organization" / "user" の2つだけ（プロバイダの検証で確認）。
       # OR-Sasaki は個人アカウントなので "user"。
+      # list-services の additionalServiceDetails.github.ownerType も "user" を返した。
       owner_type = "user"
       repo_name  = split("/", var.github_repository)[1]
       repo_id    = var.github_repo_id
+    }
+  }
+
+  # service_id を渡し忘れたまま連携を有効にすると、null が API に届いて
+  # 分かりにくいエラーで apply が落ちる。**plan の時点で止める。**
+  # D-032 と同じ「間違った値で静かに通るより、渡し忘れで止まるほうがよい」という判断。
+  lifecycle {
+    precondition {
+      condition     = var.devops_agent_github_service_id != null
+      error_message = "connect_github_to_agents = true のときは devops_agent_github_service_id が必須（D-043）。aws devops-agent list-services --query 'services[?serviceType==`github`].serviceId' --output text で取得すること。"
     }
   }
 

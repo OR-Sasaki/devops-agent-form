@@ -123,6 +123,9 @@ jobs:
         env:
           CONNECT_GITHUB_TO_AGENTS: ${{ vars.CONNECT_GITHUB_TO_AGENTS }}
           REGISTER_PENTEST_TARGET_DOMAIN: ${{ vars.REGISTER_PENTEST_TARGET_DOMAIN }}
+          # ⚠️ リテラル "github" ではなく認可時に払い出される UUID（D-043）。
+          #    アカウント固有で AWS の認証情報が無いと読めないため、リポジトリには置かない（D-020）。
+          DEVOPS_AGENT_GITHUB_SERVICE_ID: ${{ vars.DEVOPS_AGENT_GITHUB_SERVICE_ID }}
         run: |
           set -euo pipefail
 
@@ -135,6 +138,13 @@ jobs:
           # 認可より前に true にすると、存在しない連携を参照して apply が落ちる。
           if [ "${CONNECT_GITHUB_TO_AGENTS}" = "true" ]; then
             args+=(-var "connect_github_to_agents=true")
+            # service_id が無いまま連携を有効にすると plan の precondition で止まる（D-043）。
+            # ここでも先に潰しておくと、Terraform を起動する前に理由が読める。
+            if [ -z "${DEVOPS_AGENT_GITHUB_SERVICE_ID}" ]; then
+              echo "::error::CONNECT_GITHUB_TO_AGENTS=true にはリポジトリ変数 DEVOPS_AGENT_GITHUB_SERVICE_ID が必要です（D-043）。aws devops-agent list-services で取得してください。"
+              exit 1
+            fi
+            args+=(-var "devops_agent_github_service_id=${DEVOPS_AGENT_GITHUB_SERVICE_ID}")
           fi
           # ペンテストのターゲットドメインを Terraform で登録する（D-038）。
           # 検証トークンは computed 属性から ALB のリスナールールへ直接渡るので、

@@ -197,9 +197,36 @@ variable "connect_github_to_agents" {
 
     ⚠️ true にできるのは、Phase 5 で GitHub App の認可（ブラウザ操作）を済ませた後だけ。
     認可前に true にすると、存在しない連携を参照して apply が落ちる。理由は D-029 を参照。
+
+    ⚠️ true にするときは devops_agent_github_service_id も一緒に渡すこと。
   EOT
   type        = bool
   default     = false
+}
+
+variable "devops_agent_github_service_id" {
+  description = <<-EOT
+    DevOps Agent 側の GitHub 連携の service_id（D-043）。
+
+    ⚠️ **リテラル "github" ではない。** GitHub App の認可を済ませると払い出される UUID である。
+
+      aws devops-agent list-services --profile devopsagent \
+        --query 'services[?serviceType==`github`].serviceId' --output text
+
+    D-029 はコードに暫定で "github" と書いており、**それは誤りだった**。
+    service_id は API から見ればただの文字列なので **plan では捕まらず、apply で落ちる。**
+
+    ⚠️ 値は AWS の認証情報が無いと読めないアカウント固有の識別子なので、
+    リポジトリには置かずリポジトリ変数から渡す（D-020 と同じ扱い）。
+    アカウントを作り直したり GitHub App を入れ直したりすると変わる。
+  EOT
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.devops_agent_github_service_id == null || can(regex("^[a-zA-Z0-9_-]+$", var.devops_agent_github_service_id))
+    error_message = "devops_agent_github_service_id は英数字・ハイフン・アンダースコアのみ（associate-service の pattern に合わせる）。"
+  }
 }
 
 # --------------------------------------------------------------------------
