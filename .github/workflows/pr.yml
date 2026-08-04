@@ -154,6 +154,13 @@ jobs:
       - name: terraform plan
         id: plan
         working-directory: terraform/main
+        env:
+          CONNECT_GITHUB_TO_AGENTS: ${{ vars.CONNECT_GITHUB_TO_AGENTS }}
+          REGISTER_PENTEST_TARGET_DOMAIN: ${{ vars.REGISTER_PENTEST_TARGET_DOMAIN }}
+          # ⚠️ vars ではなく secrets（D-047）。vars は Actions のログでマスクされず、
+          #    ステップの env ブロックがログにそのまま展開される。
+          SECURITY_AGENT_GITHUB_INTEGRATION_ID: ${{ secrets.SECURITY_AGENT_GITHUB_INTEGRATION_ID }}
+          ENABLE_PR_CODE_REVIEW_COMMENTS: ${{ vars.ENABLE_PR_CODE_REVIEW_COMMENTS }}
         run: |
           set -uo pipefail
 
@@ -163,10 +170,37 @@ jobs:
           #
           #    image_tag は default を持たない必須変数なので必ず渡す（D-032）。
           #    plan は ECR にイメージが実在するかを確かめないので、未 push の SHA でも通る。
+
+          # ⚠️⚠️ deploy.yml と**同じ変数**を渡すこと（D-046）。⚠️⚠️
+          #
+          #   渡さないと variables.tf の既定（false）が効き、**実在するリソースを
+          #   破棄する plan が出る。** 実際に PR #2 で
+          #   「検証済みのターゲットドメインと TXT レコードを destroy する」計画が出た。
+          #
+          #   これは嘘の差分であって本物の変更ではない。放置すると
+          #   「いつもの destroy」を読み飛ばす癖がつき、**本物の1件がそこに埋もれる。**
+          #   D-037 が ignore_changes を却下したのとまったく同じ理由である。
+          args=(-no-color -input=false -lock=false
+                -var "image_tag=${{ github.event.pull_request.head.sha }}")
+
+          # ⚠️ ネストの形まで deploy.yml と揃えること（D-047）。
+          #    enable_pr_code_review_comments は connect_github_to_agents の**内側**に置く。
+          #    外に出すと、CONNECT=false / ENABLE=true のときに plan だけが値を受け取る。
+          #    今は security-agent.tf 側でこの変数が connect の三項演算子の中にしか
+          #    現れないため実害は出ないが、**参照が増えた瞬間に plan と apply がずれる。**
+          if [ "${CONNECT_GITHUB_TO_AGENTS}" = "true" ]; then
+            args+=(-var "connect_github_to_agents=true")
+            args+=(-var "security_agent_github_integration_id=${SECURITY_AGENT_GITHUB_INTEGRATION_ID}")
+            if [ "${ENABLE_PR_CODE_REVIEW_COMMENTS}" = "true" ]; then
+              args+=(-var "enable_pr_code_review_comments=true")
+            fi
+          fi
+          if [ "${REGISTER_PENTEST_TARGET_DOMAIN}" = "true" ]; then
+            args+=(-var "register_pentest_target_domain=true")
+          fi
+
           exit_code=0
-          terraform plan -no-color -input=false -lock=false \
-            -var "image_tag=${{ github.event.pull_request.head.sha }}" \
-            > plan.txt 2>&1 || exit_code=$?
+          terraform plan "${args[@]}" > plan.txt 2>&1 || exit_code=$?
           echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
 
           # 常にログにも出す。コメントが投稿できなかったときの逃げ道になる。

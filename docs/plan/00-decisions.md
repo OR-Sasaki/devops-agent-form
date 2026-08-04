@@ -2,7 +2,7 @@
 
 グリルセッションで確定した決定を、決まった順に記録する。用語は [CONTEXT.md](../../CONTEXT.md) に従う。
 
-**ステータス: 決定確定（D-001〜D-045）／Phase 0・Phase 1・Phase 2・Phase 3・Phase 4 完了／Phase 5・Phase 6 進行中／検証期間は 2026-08-10 頃まで**
+**ステータス: 決定確定（D-001〜D-047）／Phase 0・Phase 1・Phase 2・Phase 3・Phase 4 完了／Phase 5・Phase 6 進行中／検証期間は 2026-08-10 頃まで**
 2026-08-02 のグリルセッションで全項目を解消。同日の外部レビューを受けて D-014・D-015 を追加し、[D-002](#d-002-実行基盤は-ecs-fargate--alb--dynamodb) のコスト見積りと [D-008](#d-008-リージョンは-ap-northeast-1-に統一) のリスク認識を訂正した。
 同日の [Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) の実機確認で D-016・D-017 を追加し、[D-008](#d-008-リージョンは-ap-northeast-1-に統一) の「3目標すべて東京で成立する」という記述を**再度訂正した**（[D-017](#d-017-目標2-の到達点を-agent-ready-specification-に縮小する) を参照）。
 [Phase 0](./02-implementation-plan.md#phase-0-アカウント発行と前提確認) 完了時に D-018・D-019 を、Phase 1 の着手準備で D-020 を追加した。
@@ -1941,9 +1941,79 @@ Public GitHub repositories are supported for pentesting and not for code review 
 
 ---
 
+## D-046: pr.yml の plan には deploy.yml と同じ変数を渡す
+
+**決定** — `pr.yml` の `terraform plan` に、`deploy.yml` の `apply` と**同じ変数を同じ条件で**渡す。
+
+**経緯** — [Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) 項目10 の確認用に出した [PR #2](https://github.com/OR-Sasaki/devops-agent-form/pull/2) で、**テストを足しただけの差分に対して plan がこう出た。**
+
+```
+Plan: 1 to add, 1 to change, 3 to destroy.
+  # aws_route53_record.pentest_verification[0] will be destroyed
+  # awscc_securityagent_target_domain.pentest[0] will be destroyed
+```
+
+**検証済みのターゲットドメインを破棄する計画**である。原因は `pr.yml` が
+`register_pentest_target_domain` 等を渡しておらず、`variables.tf` の既定（`false`）が効いていたこと。
+
+> **これは嘘の差分であって、本物の変更ではない。**
+> 放置すると「いつもの destroy」を読み飛ばす癖がつき、**本物の1件がそこに埋もれる。**
+> [D-037](#d-037-awscc-の永続的な差分は-config-側を-api-に合わせて潰す) が `ignore_changes` を却下したのとまったく同じ理由である。
+
+**⚠️ この差分は「見えるだけ」では済まない。** `terraform/main/` の apply 経路は CI 1本（[D-009](#d-009-アプリも-terraform-も-ci-から-apply-する完全-gitops)）なので
+PR の plan がそのまま apply されることは無いが、**もし誰かがこの plan を信じて手で apply すれば
+検証済みドメインが消え、[D-042](#d-042-http_route-検証は-https-と有効な証明書を要求するドメインを取得して-dns_txt-に切り替える) の検証をやり直すことになる。**
+
+**一般化** — **plan と apply で変数の渡し方が違えば、plan は apply の予告ではなくなる。**
+機能フラグをリポジトリ変数で足すたびに、**2つのワークフローの両方に足す**こと。
+
+---
+
+## D-047: 連携 ID は Variables ではなく Secrets に置く
+
+**決定** — `SECURITY_AGENT_GITHUB_INTEGRATION_ID` を GitHub の **Variables から Secrets へ移す。**
+あわせて Terraform の `var.security_agent_github_integration_id` に **`sensitive = true`** を付ける。
+
+**経緯 — [D-046](#d-046-pryml-の-plan-には-deployyml-と同じ変数を渡す) の修正そのものを Security Agent が指摘した。** [Phase 6](./02-implementation-plan.md#phase-6-受け入れ確認) 項目10 の確認で出した PR に対し、
+**この値が公開経路に載ると指摘された。** 指摘を鵜呑みにせず実測して確かめた結果は次の通り。
+
+| 指摘された経路 | 実測 |
+|---|---|
+| plan 出力 → PR コメント | **出ていなかった。** 当該リソースに差分が無ければ値は plan に現れない |
+| **Actions のログ** | **出ていた。** ステップの `env:` ブロックが展開されてそのまま記録される |
+
+```
+terraform plan  SECURITY_AGENT_GITHUB_INTEGRATION_ID: <実値>
+```
+
+> **`::add-mask::` では防げない。** env ブロックの展開は `run:` のスクリプトが動く前に記録されるため、
+> スクリプト内でマスクを宣言しても間に合わない。**Secrets にすれば GitHub が自動でマスクする。**
+
+**[D-020](#d-020-oidc-ロールの-arn-はリポジトリ変数に逃がす) の「Secrets ではなく Variables」と矛盾しないのか** — 矛盾しない。[D-020](#d-020-oidc-ロールの-arn-はリポジトリ変数に逃がす) が Variables を選んだ理由は
+**「秘密ではないから」**である。一方この値については、[D-044](#d-044-devops-agent-の-github-association-は-terraform-で管理しない) 自身が「リポジトリには置かない」と決めていた。
+**置かないと決めた値がログに出るなら、置き場所の選択が間違っている。**
+
+> **⚠️ この値は資格情報ではない。** AWS の認証情報が無ければ使えない不透明な識別子で、
+> [D-022](#d-022-メールアドレスはリポジトリに置かない) が Agent Space ID について言う「同一性の識別には足り、値としては使えない」ものと同じ性質である。
+> **深刻な漏洩ではない。** それでも直すのは、[D-020](#d-020-oidc-ロールの-arn-はリポジトリ変数に逃がす) の「公開しないで済むものを公開する理由も無い」に照らして一貫していないからである。
+
+**⚠️ 既存の Actions ログには実値が残っている。** public に戻す前に、当該 run を削除すること。
+**「現在のファイルから消した」は「消した」ではない**（[D-025](#d-025-初回-push-の前に-git-履歴を書き換える)）という原則が、ここではログに適用される。
+
+**2件目の指摘（`pr.yml` のネスト構造）も直した** — `enable_pr_code_review_comments` の分岐を
+`connect_github_to_agents` の外側に書いていたため、`deploy.yml` と構造が非対称だった。
+
+> **ただし指摘された「plan と apply がずれる」実害は、現時点では発生しない。**
+> この変数は `security-agent.tf` で `connect_github_to_agents ? [...] : null` の**内側にしか現れない**ため、
+> `connect` が false なら参照されず、値を渡しても plan は変わらない。
+> **指摘はコードの形について正しく、影響について過大だった。** それでも直したのは、
+> 参照が1箇所増えた瞬間に本物のずれになるためである。
+
+---
+
 ## 未決事項
 
-**判断事項は無い。** D-001〜D-045 で解消済み。新しい判断が生じたら D-046 以降として追記する。
+**判断事項は無い。** D-001〜D-047 で解消済み。新しい判断が生じたら D-048 以降として追記する。
 
 ### 未確認のまま残っている事実
 

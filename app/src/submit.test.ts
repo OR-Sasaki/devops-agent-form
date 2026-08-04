@@ -94,3 +94,50 @@ test("buildSubmission は入力をエスケープしない（出力側の責務�
   const payload = '<script>alert(1)</script>';
   assert.equal(buildSubmission({ ...valid, message: payload }).message, payload);
 });
+
+// --------------------------------------------------------------------------
+// 敵対的な入力（Phase 6 の項目10 で Security Agent に見せる差分）
+// --------------------------------------------------------------------------
+//
+// ⚠️ ここで足すのはテストだけで、submit.ts の挙動は1文字も変えていない。
+//    D-035 の「ベースラインには観点3 の故障を1つも置かない」を守るため。
+//    下の3件はいずれも**既に正しく処理されている**ことの確認であり、修正ではない。
+
+test("toSingleLineString は CRLF を空白に潰す（ヘッダ注入の芽を摘む）", () => {
+  const input = extractInput({
+    name: "太郎\r\nBcc: attacker@example.com",
+    email: "taro@example.com",
+    message: "本文",
+  });
+
+  assert.ok(!input.name.includes("\r"), "CR が残っている");
+  assert.ok(!input.name.includes("\n"), "LF が残っている");
+  assert.equal(input.name, "太郎 Bcc: attacker@example.com");
+});
+
+test("message の改行は保持される（1行フィールドではないため）", () => {
+  const input = extractInput({ ...valid, message: "1行目\n2行目" });
+  assert.equal(input.message, "1行目\n2行目");
+});
+
+test("上限の2倍を超える入力は切り詰められ、なお検証で弾かれる", () => {
+  // clamp は上限の2倍で頭打ちにする。**切り詰めた値をそのまま通さない**ことが要点で、
+  // 長さ超過は validateInput 側が必ず捕まえる。
+  const input = extractInput({ ...valid, name: "あ".repeat(FIELD_LIMITS.name * 5) });
+
+  assert.equal(input.name.length, FIELD_LIMITS.name * 2);
+
+  const errors = validateInput(input);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0]?.field, "name");
+});
+
+test("buildSubmission は入力値をそのまま保持する（エスケープは表示側の責務）", () => {
+  // ⚠️ 保存時にエスケープしないのは意図的である。XSS 対策の本体は admin.tsx 側の
+  //    hono/jsx による自動エスケープであり、保存時に加工すると二重エスケープになる。
+  const raw = '<script>alert(1)</script>';
+  const submission = buildSubmission({ ...valid, message: raw });
+
+  assert.equal(submission.message, raw);
+  assert.match(submission.id, /^[0-9a-f-]{36}$/);
+});
